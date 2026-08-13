@@ -37,12 +37,28 @@ export function usePTT(): UsePTTReturn {
   // shouldDuckAndroid. playThroughEarpieceAndroid has no direct
   // equivalent -- expo-audio defaults to speaker routing, which is what
   // this app wants (a CB radio should be heard, not held to your ear).
+  //
+  // Real bug found via live iOS device testing: connect() called
+  // setupAudio() fire-and-forget (unawaited), and startTransmit() called
+  // it again, awaited. On iOS, AVAudioSession category changes are
+  // timing-sensitive -- two overlapping setAudioModeAsync calls can race
+  // and leave the session in a state where prepareToRecordAsync()/record()
+  // throw INVALID_STATE_ERR. Android's AudioManager is far more forgiving
+  // of the same pattern, which is why this only surfaced on iOS. Fixed by
+  // sharing a single in-flight promise so concurrent callers await the
+  // same underlying call instead of racing two separate ones.
+  const audioSetupPromiseRef = useRef<Promise<void> | null>(null);
   const setupAudio = useCallback(async () => {
-    await setAudioModeAsync({
-      allowsRecording: true,
-      playsInSilentMode: true,
-      interruptionMode: 'duckOthers',
-    });
+    if (!audioSetupPromiseRef.current) {
+      audioSetupPromiseRef.current = setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        interruptionMode: 'duckOthers',
+      }).finally(() => {
+        audioSetupPromiseRef.current = null;
+      });
+    }
+    return audioSetupPromiseRef.current;
   }, []);
 
   const connect = useCallback((callSign: string, lat: number, lng: number, range: number) => {
@@ -127,6 +143,12 @@ export function usePTT(): UsePTTReturn {
   }, []);
 
   const startTransmit = useCallback(async () => {
+    // Guard against a second press firing while the first is still
+    // mid-setup (e.g. rapid double-tap) -- creating a second AudioRecorder
+    // before the first is prepared is another path to the same
+    // INVALID_STATE_ERR seen on iOS.
+    if (recorderRef.current || transmitting) return;
+
     try {
       await setupAudio();
 
@@ -137,17 +159,18 @@ export function usePTT(): UsePTTReturn {
       }
 
       const recorder = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
+      recorderRef.current = recorder;
       await recorder.prepareToRecordAsync();
       recorder.record();
-      recorderRef.current = recorder;
       setTransmitting(true);
 
       // Notify relay
       wsRef.current?.send(JSON.stringify({ type: 'ptt_start' }));
     } catch (e) {
       console.error('Failed to start recording:', e);
+      recorderRef.current = null;
     }
-  }, [setupAudio]);
+  }, [setupAudio, transmitting]);
 
   const stopTransmit = useCallback(async () => {
     try {
