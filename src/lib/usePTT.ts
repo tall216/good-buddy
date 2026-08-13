@@ -104,6 +104,30 @@ export function usePTT(): UsePTTReturn {
   const intentionallyClosedRef = useRef(false);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Real bug found via live cross-platform testing: pressed PTT and heard
+  // an "echo" -- the same transmission playing back multiple times. Real
+  // server logs showed the actual cause: "TestRig disconnected" firing
+  // 2-3 times simultaneously, then 3-4 "New connection"/"joined" events
+  // firing within milliseconds of each other on server restart -- meaning
+  // MULTIPLE independent WebSocket connections, all claiming the same
+  // call sign, were alive at once from the one physical device. Each
+  // connect() call's openSocket()/reconnect closures had no way to know
+  // if they'd been superseded by a newer connect() call (this session's
+  // heavy live-code-editing-while-connected testing repeatedly triggered
+  // Fast Refresh on this file, and React Native's Fast Refresh does not
+  // reliably tear down in-flight closures like a pending
+  // setTimeout(openSocket, delay) reconnect timer from a hook instance
+  // that's since been replaced) -- so an orphaned reconnect loop from an
+  // earlier hook instance kept running forever in the background,
+  // independently reconnecting and duplicating every broadcast. Fixed
+  // with a generation counter: every connect() call increments this and
+  // captures its own value; openSocket()/onclose's reconnect scheduling
+  // both check they're still the current generation before doing
+  // anything, so a stale closure becomes permanently inert the moment a
+  // newer connect() call supersedes it -- regardless of the underlying
+  // cause (Fast Refresh, a genuine double-mount, anything).
+  const connectionGenerationRef = useRef(0);
+
   // Set up audio mode for playback through speaker.
   // Migrated from expo-av's setAudioModeAsync -- the old shape
   // (allowsRecordingIOS, shouldDuckAndroid, playThroughEarpieceAndroid,
@@ -140,6 +164,12 @@ export function usePTT(): UsePTTReturn {
     setupAudio();
     intentionallyClosedRef.current = false;
 
+    // Capture this call's own generation. Any closure below that reads
+    // connectionGenerationRef.current later and finds it no longer
+    // matches myGeneration knows it's been superseded and must not act.
+    connectionGenerationRef.current += 1;
+    const myGeneration = connectionGenerationRef.current;
+
     // Real gap found via live testing: the relay server (Render free
     // tier) went idle and restarted mid-session, killing the WebSocket
     // with no reconnection attempt -- confirmed via the server's own
@@ -152,6 +182,12 @@ export function usePTT(): UsePTTReturn {
     const MAX_RECONNECT_DELAY_MS = 15000;
 
     const openSocket = () => {
+      // Real fix for the duplicate-connection "echo" bug -- see this
+      // ref's declaration comment above for the full root-cause story.
+      // A stale reconnect timer firing after a newer connect() call has
+      // already taken over must not open yet another socket.
+      if (connectionGenerationRef.current !== myGeneration) return;
+
       const ws = new WebSocket(RELAY_URL);
       wsRef.current = ws;
 
@@ -167,6 +203,12 @@ export function usePTT(): UsePTTReturn {
       };
 
       ws.onmessage = async (event) => {
+        // Real fix for the duplicate-connection "echo" bug -- a stale
+        // socket from a superseded connect() generation can still
+        // deliver messages in the brief window before its own onclose
+        // fires. Refuse to act on anything once superseded.
+        if (connectionGenerationRef.current !== myGeneration) return;
+
         let msg;
         try {
           msg = JSON.parse(event.data);
@@ -240,6 +282,10 @@ export function usePTT(): UsePTTReturn {
       ws.onclose = () => {
         console.log('WebSocket disconnected');
         if (intentionallyClosedRef.current) return;
+        // Real fix for the duplicate-connection "echo" bug -- a
+        // superseded generation's socket closing must not schedule yet
+        // another reconnect; the current generation already owns that.
+        if (connectionGenerationRef.current !== myGeneration) return;
         // Exponential backoff, capped, so a persistently-down relay
         // doesn't hammer it or drain the battery.
         const delay = Math.min(1000 * 2 ** reconnectAttempts, MAX_RECONNECT_DELAY_MS);

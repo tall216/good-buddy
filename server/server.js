@@ -49,6 +49,28 @@ wss.on('connection', (ws) => {
 
     switch (msg.type) {
       case 'join': {
+        // Real hardening added after a live "hearing myself" bug: a
+        // client-side duplicate-connection race (multiple WebSocket
+        // instances all registering under the same call sign, root
+        // cause was a stale reconnect-timer closure surviving a
+        // superseded connect() call -- see usePTT.ts's
+        // connectionGenerationRef comment for the full story) meant
+        // this server was relaying a sender's own audio back to their
+        // OTHER stale connections, which are trivially "in range" of
+        // themselves. The client-side fix prevents new duplicates from
+        // forming, but this server-side guard is real defense in depth:
+        // if a call sign re-joins while an older connection under that
+        // same call sign is still open, close the older one explicitly
+        // instead of ever letting two live connections share an
+        // identity.
+        for (const [existingWs, existingClient] of clients) {
+          if (existingWs !== ws && existingClient.callSign === msg.callSign) {
+            console.log(`${msg.callSign} re-joined -- closing a stale duplicate connection`);
+            existingWs.close();
+            clients.delete(existingWs);
+          }
+        }
+
         // Client registers with location
         clients.set(ws, {
           callSign: msg.callSign || 'Unknown',
