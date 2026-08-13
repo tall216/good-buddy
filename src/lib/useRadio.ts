@@ -45,7 +45,7 @@ export function useRadio(): UseRadioReturn {
       setUserId(id);
       return true;
     }
-    setError('Failed to register. Call sign may be taken.');
+    setError('Registration failed. Check your connection and try again.');
     return false;
   }, []);
 

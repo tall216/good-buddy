@@ -8,7 +8,6 @@ import {
   Dimensions,
 } from 'react-native';
 import { colors, spacing, fonts } from '../theme';
-import { AdSlot } from '../components/AdSlot';
 import { useRadio } from '../lib/useRadio';
 import { usePTT } from '../lib/usePTT';
 
@@ -53,13 +52,31 @@ export default function RadioScreen({ callSign }: Props) {
   // Previously this connected immediately with hardcoded (0, 0) coordinates,
   // meaning the relay server's distance-based audio filtering never used
   // real location at all. Now waits for useRadio's actual location.
+  //
+  // Real bug found via live device testing (backgrounding the app, then
+  // watching the relay server's own logs): this effect depended on
+  // [userId, location], and `location` changes every 5-10s via
+  // watchPositionAsync -- so connect()/disconnect() was firing on EVERY
+  // location update, not once. The relay logs showed a client repeatedly
+  // joining and disconnecting every ~10-20s, which is this bug in action,
+  // not a real network issue. Fixed by connecting once (gated on a ref)
+  // and routing subsequent location changes through the separate
+  // updateLocation() call below instead of a full reconnect.
+  const hasConnectedRef = useRef(false);
   useEffect(() => {
-    if (userId && location) {
+    if (userId && location && !hasConnectedRef.current) {
+      hasConnectedRef.current = true;
       const { latitude, longitude } = location.coords;
       connect(callSign, latitude, longitude, range);
-      return () => disconnect();
     }
   }, [userId, location]);
+
+  useEffect(() => {
+    return () => {
+      hasConnectedRef.current = false;
+      disconnect();
+    };
+  }, []);
 
   // Push real location + range updates to the relay as either changes.
   useEffect(() => {
