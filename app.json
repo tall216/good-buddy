@@ -1,25 +1,47 @@
 {
   "expo": {
-    "name": "good-buddy",
+    "name": "Good Buddy",
     "slug": "good-buddy",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#1a1a0a",
+    "scheme": "goodbuddy",
     "ios": {
-      "supportsTablet": true
+      "bundleIdentifier": "com.davidevans.goodbuddy",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Good Buddy uses your location to find other CB users nearby so you can talk to them. Your exact location is never shown to other users — only your approximate distance.",
+        "NSMicrophoneUsageDescription": "Good Buddy needs the microphone to transmit your voice when you press and hold the Push-to-Talk button.",
+        "UIBackgroundModes": []
+      }
     },
     "android": {
+      "package": "com.davidevans.goodbuddy",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#1a1a0a",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Good Buddy uses your location to find other CB users nearby so you can talk to them. Your exact location is never shown to other users — only your approximate distance."
+        }
+      ]
+    ]
   }
 }
