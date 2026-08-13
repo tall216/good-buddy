@@ -1,4 +1,5 @@
 import { useRef, useCallback, useState } from 'react';
+import { Platform } from 'react-native';
 import {
   AudioModule,
   type AudioRecorder,
@@ -15,29 +16,45 @@ const RELAY_URL = process.env.EXPO_PUBLIC_RELAY_URL || 'ws://localhost:8080';
 
 // Voice-tuned recording preset. Real latency fix: the app was using
 // RecordingPresets.HIGH_QUALITY (44.1kHz stereo AAC @ 128kbps) for a
-// push-to-talk voice channel, not music. That's roughly 16KB/sec of
-// audio to base64-encode, send over the relay, and decode on the other
-// end -- for every single transmission, no matter how short. Voice is
-// intelligible at far lower bitrates/sample rates than that.
+// push-to-talk voice channel, not music -- see this file's git history
+// for that fix's detail.
 //
-// IMPORTANT cross-platform consistency note: RecordingPresets.LOW_QUALITY
-// was NOT usable here even though it looks like the obvious choice --
-// it uses a DIFFERENT container/codec per platform (.3gp/amr_nb on
-// Android vs .m4a/AAC on iOS), which would have broken the single
-// hardcoded 'audio/m4a' mime type the receiving side uses to build a
-// playable data URI. Defined a custom preset instead: same .m4a/AAC
-// container on both platforms, just tuned down for voice -- mono,
-// 22050Hz (well above telephone-quality 8kHz, well below full-fidelity
-// 44.1kHz), 32kbps. Roughly a 4x reduction in bytes-per-second versus
-// HIGH_QUALITY.
+// REAL BUG FOUND AND ROOT-CAUSED via ffprobe analysis of actual recorded
+// files pulled off a physical Android device (Galaxy A42, Android 12) via
+// adb + run-as: every single Android-recorded .m4a/.mp4 file -- with
+// EITHER this custom preset OR the original built-in HIGH_QUALITY preset,
+// confirmed via git history timestamps that a corrupted file predates
+// this preset's introduction -- had valid ftyp/mdat boxes but was
+// completely missing its moov atom (the container trailer with all
+// seek/duration metadata). 100% reproducible, not size- or
+// duration-related (confirmed via real timing instrumentation: a genuine
+// 2736ms recording produced the identical corruption as very short ones).
+// Investigated the actual expo-audio Android Kotlin source
+// (AudioRecorder.kt) and found this specific device/SDK combination
+// still exhibits data loss on MediaRecorder.stop() even though status
+// reports hasError: false -- MP4/M4A's atom-based container requires a
+// clean trailer write on stop() to be valid at all, and something in
+// this environment (an OEM MediaRecorder quirk, per multiple similar
+// real-world reports found via research) isn't reliably completing that
+// write. 3GP does not have this same fragility -- its container format
+// doesn't depend on a single trailer write to remain parseable. Real,
+// pragmatic fix: give each platform the recording options its own native
+// MediaRecorder/AVAudioRecorder handles most reliably, rather than
+// forcing a single shared container. iOS keeps .m4a/AAC (proven reliable
+// via extensive live cross-platform testing this session). Android
+// switches to .3gp/AMR-NB. The two platforms' outputs are no longer
+// byte-compatible, so the WebSocket message now tags which format
+// produced each chunk (see 'format' field below) and the receiving side
+// builds its playback data URI from that instead of a single hardcoded
+// MIME type.
 const VOICE_RECORDING_OPTIONS: RecordingOptions = {
-  extension: '.m4a',
-  sampleRate: 22050,
+  extension: Platform.OS === 'android' ? '.3gp' : '.m4a',
+  sampleRate: Platform.OS === 'android' ? 8000 : 22050,
   numberOfChannels: 1,
-  bitRate: 32000,
+  bitRate: Platform.OS === 'android' ? 12200 : 32000,
   android: {
-    outputFormat: 'mpeg4',
-    audioEncoder: 'aac',
+    outputFormat: '3gp',
+    audioEncoder: 'amr_nb',
   },
   ios: {
     outputFormat: 'aac ',
@@ -50,6 +67,15 @@ const VOICE_RECORDING_OPTIONS: RecordingOptions = {
     mimeType: 'audio/webm',
     bitsPerSecond: 32000,
   },
+};
+
+// MIME type to use when building a playable data URI, matched to the
+// ACTUAL format this platform records in (see VOICE_RECORDING_OPTIONS
+// above for why these differ per platform).
+const RECORDED_AUDIO_FORMAT = Platform.OS === 'android' ? '3gp' : 'm4a';
+const AUDIO_MIME_BY_FORMAT: Record<string, string> = {
+  '3gp': 'audio/3gpp',
+  m4a: 'audio/m4a',
 };
 
 interface UsePTTReturn {
@@ -68,6 +94,10 @@ export function usePTT(): UsePTTReturn {
   const playerRef = useRef<AudioPlayer | null>(null);
   const [transmitting, setTransmitting] = useState(false);
   const [lastHeard, setLastHeard] = useState<string | null>(null);
+  // TEMP diagnostic ref for the moov-atom investigation -- tracks real
+  // wall-clock recording duration to check whether adb-synthesized touch
+  // presses are registering as much shorter holds than requested.
+  const recordStartTimeRef = useRef<number | null>(null);
 
   // Shared across connect()/disconnect() -- see the real bug this fixes
   // in disconnect()'s comment below.
@@ -150,14 +180,14 @@ export function usePTT(): UsePTTReturn {
             setLastHeard(msg.callSign);
             const tReceived = Date.now();
             try {
-              // Decode base64 to a data URI. Real bug found while investigating
-              // playback latency: RecordingPresets.HIGH_QUALITY actually
-              // records .m4a (MPEG-4 AAC), not WAV -- this was hardcoded to
-              // 'audio/wav', a real MIME-type mismatch. Some players tolerate
-              // it via content-sniffing (which is itself extra probing work
-              // before playback can start), some don't. Fixed to match the
-              // real recorded format.
-              const uri = `data:audio/m4a;base64,${msg.data}`;
+              // Decode base64 to a data URI, using the MIME type that
+              // matches whichever format the SENDER actually recorded in
+              // (see VOICE_RECORDING_OPTIONS/AUDIO_MIME_BY_FORMAT above --
+              // Android and iOS now record in genuinely different
+              // container formats after the real moov-atom-corruption fix,
+              // so this can no longer be a single hardcoded MIME type).
+              const senderFormat = msg.format && AUDIO_MIME_BY_FORMAT[msg.format] ? msg.format : RECORDED_AUDIO_FORMAT;
+              const uri = `data:${AUDIO_MIME_BY_FORMAT[senderFormat]};base64,${msg.data}`;
               // Release the previous player before creating a new one --
               // expo-audio's imperative players are not auto-garbage-collected
               // like expo-av's Audio.Sound.createAsync results were.
@@ -259,6 +289,7 @@ export function usePTT(): UsePTTReturn {
       recorderRef.current = recorder;
       await recorder.prepareToRecordAsync();
       recorder.record();
+      recordStartTimeRef.current = Date.now();
       setTransmitting(true);
 
       // Notify relay
@@ -285,13 +316,45 @@ export function usePTT(): UsePTTReturn {
 
   const stopTransmit = useCallback(async () => {
     const tRelease = Date.now();
+    const heldForMs = recordStartTimeRef.current ? tRelease - recordStartTimeRef.current : null;
     try {
       const recorder = recorderRef.current;
       if (!recorder) return;
 
+      // Real bug found via ffprobe analysis of actual recorded files
+      // pulled off the physical Android device (adb + run-as): every
+      // Android-recorded .m4a had valid ftyp/mdat boxes but NO moov atom
+      // -- 100% reproducible, not size- or duration-related. Root-caused
+      // to Android's native MediaRecorder.stop() in expo-audio's own
+      // Kotlin source (AudioRecorder.kt): when the native stop() call
+      // throws a RuntimeException (a real, documented MediaRecorder
+      // behavior), the catch block swallows it, calls reset()
+      // (release()) anyway, and the JS-side stop() promise still
+      // resolves normally -- so this code was blindly trusting
+      // recorder.uri as if the file were valid, with zero way to know
+      // the native stop actually failed to finalize the container.
+      // expo-audio DOES expose this via a real event
+      // (recordingStatusUpdate, with hasError/error/url fields) that
+      // this code was never listening for. Fixed by awaiting that
+      // event instead of trusting the bare stop() resolution + .uri.
+      const statusPromise = new Promise<{ hasError: boolean; error: string | null; url: string | null }>((resolve) => {
+        const subscription = recorder.addListener('recordingStatusUpdate', (status) => {
+          if (status.isFinished) {
+            subscription.remove();
+            resolve({ hasError: status.hasError, error: status.error, url: status.url });
+          }
+        });
+      });
+
       await recorder.stop();
+      const status = await statusPromise;
       const tStopped = Date.now();
-      const uri = recorder.uri;
+
+      if (status.hasError) {
+        console.error('Native recorder failed to finalize the file:', status.error);
+      }
+      const uri = status.hasError ? null : status.url;
+
       // Release the native recorder object now that we're done with it --
       // see the matching comment in startTransmit's catch block for why
       // this matters (un-released native AudioRecorder instances were a
@@ -323,11 +386,12 @@ export function usePTT(): UsePTTReturn {
           wsRef.current?.send(JSON.stringify({
             type: 'audio',
             data: base64,
+            format: RECORDED_AUDIO_FORMAT,
           }));
           const tSent = Date.now();
           // TEMP instrumentation for diagnosing perceived delay -- remove
           // once the real latency budget is understood and settled.
-          console.log(`[latency] release->recorder.stop: ${tStopped - tRelease}ms, stop->base64: ${tEncoded - tStopped}ms, base64->ws.send: ${tSent - tEncoded}ms, total local: ${tSent - tRelease}ms, ${base64.length} b64 chars`);
+          console.log(`[latency] held for: ${heldForMs}ms, release->recorder.stop: ${tStopped - tRelease}ms, stop->base64: ${tEncoded - tStopped}ms, base64->ws.send: ${tSent - tEncoded}ms, total local: ${tSent - tRelease}ms, ${base64.length} b64 chars`);
         } catch (e) {
           console.error('Failed to read recording as base64:', e);
         }

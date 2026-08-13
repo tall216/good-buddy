@@ -106,6 +106,14 @@ wss.on('connection', (ws) => {
               type: 'audio',
               callSign: sender.callSign,
               data: chunk,
+              // Real fix accompanying the Android moov-atom-corruption
+              // fix (see usePTT.ts VOICE_RECORDING_OPTIONS comment):
+              // Android and iOS now record in genuinely different
+              // container formats (.3gp/AMR-NB vs .m4a/AAC), so the
+              // relay must forward which format the sender used --
+              // without this, the receiving client can't build a
+              // correctly-typed playback data URI.
+              format: msg.format,
               serverReceivedAt,
               serverRelayedAt: Date.now(),
             }));
