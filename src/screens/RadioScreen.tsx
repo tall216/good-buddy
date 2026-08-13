@@ -28,6 +28,7 @@ export default function RadioScreen({ callSign }: Props) {
   const {
     userId,
     nearbyCount,
+    location,
     error,
     register,
     setDiscoverable: updateDiscoverable,
@@ -48,18 +49,25 @@ export default function RadioScreen({ callSign }: Props) {
     register(callSign);
   }, [callSign]);
 
-  // Connect to audio relay when we have a userId
+  // Connect to audio relay once we have both a userId and a real GPS fix.
+  // Previously this connected immediately with hardcoded (0, 0) coordinates,
+  // meaning the relay server's distance-based audio filtering never used
+  // real location at all. Now waits for useRadio's actual location.
   useEffect(() => {
-    if (userId) {
-      connect(callSign, 0, 0, range);
+    if (userId && location) {
+      const { latitude, longitude } = location.coords;
+      connect(callSign, latitude, longitude, range);
       return () => disconnect();
     }
-  }, [userId]);
+  }, [userId, location]);
 
-  // Update relay when range changes
+  // Push real location + range updates to the relay as either changes.
   useEffect(() => {
-    updateLocation(0, 0, range);
-  }, [range]);
+    if (location) {
+      const { latitude, longitude } = location.coords;
+      updateLocation(latitude, longitude, range);
+    }
+  }, [range, location]);
 
   // VU meter animation
   const vuAnim = useRef(new Animated.Value(0)).current;
