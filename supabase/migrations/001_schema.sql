@@ -42,7 +42,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION find_nearby_users(
   p_lat DOUBLE PRECISION,
   p_lng DOUBLE PRECISION,
-  p_range_miles DOUBLE PRECISION
+  p_range_miles DOUBLE PRECISION,
+  p_exclude_id UUID DEFAULT NULL
 ) RETURNS TABLE (
   id UUID,
   call_sign TEXT,
@@ -60,7 +61,7 @@ BEGIN
   FROM users u
   WHERE
     u.discoverable = true
-    AND u.id != (SELECT id FROM users WHERE call_sign = current_setting('app.current_call_sign', true))
+    AND (p_exclude_id IS NULL OR u.id != p_exclude_id)
     AND ST_DWithin(
       u.location,
       ST_SetSRID(ST_MakePoint(p_lng, p_lat), 4326)::GEOGRAPHY,

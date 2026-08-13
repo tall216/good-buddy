@@ -95,7 +95,7 @@ export function useRadio(): UseRadioReturn {
       const { latitude, longitude } = locationRef.current?.coords || {};
       if (!latitude || !longitude) return;
 
-      const users = await findNearbyUsers(latitude, longitude, rangeRef.current);
+      const users = await findNearbyUsers(latitude, longitude, rangeRef.current, userIdRef.current ?? undefined);
       setNearbyUsers(users);
     };
 

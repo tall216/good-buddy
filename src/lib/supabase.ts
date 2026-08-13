@@ -54,12 +54,14 @@ export async function updateLocation(
 export async function findNearbyUsers(
   lat: number,
   lng: number,
-  rangeMiles: number
+  rangeMiles: number,
+  excludeUserId?: string
 ): Promise<NearbyUser[]> {
   const { data, error } = await supabase.rpc('find_nearby_users', {
     p_lat: lat,
     p_lng: lng,
     p_range_miles: rangeMiles,
+    p_exclude_id: excludeUserId ?? null,
   });
 
   if (error) {
