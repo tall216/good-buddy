@@ -20,9 +20,18 @@ export interface NearbyUser {
 }
 
 export async function registerUser(callSign: string): Promise<string | null> {
+  // Upsert on call_sign so reopening the app with the same handle
+  // "reclaims" it instead of throwing a raw duplicate-key Postgres error.
+  // This is safe for an MVP with no auth -- call signs aren't secured to
+  // a particular device/account, so anyone can technically re-claim any
+  // handle. Fine for now; would need real auth to prevent handle-squatting
+  // abuse before a public launch.
   const { data, error } = await supabase
     .from('users')
-    .insert({ call_sign: callSign })
+    .upsert(
+      { call_sign: callSign, last_seen: new Date().toISOString() },
+      { onConflict: 'call_sign' }
+    )
     .select('id')
     .single();
 
