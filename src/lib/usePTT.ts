@@ -3,14 +3,54 @@ import {
   AudioModule,
   type AudioRecorder,
   type AudioPlayer,
+  type RecordingOptions,
   createAudioPlayer,
   setAudioModeAsync,
   requestRecordingPermissionsAsync,
-  RecordingPresets,
 } from 'expo-audio';
+import { File } from 'expo-file-system';
 
 // WebSocket relay server URL
 const RELAY_URL = process.env.EXPO_PUBLIC_RELAY_URL || 'ws://localhost:8080';
+
+// Voice-tuned recording preset. Real latency fix: the app was using
+// RecordingPresets.HIGH_QUALITY (44.1kHz stereo AAC @ 128kbps) for a
+// push-to-talk voice channel, not music. That's roughly 16KB/sec of
+// audio to base64-encode, send over the relay, and decode on the other
+// end -- for every single transmission, no matter how short. Voice is
+// intelligible at far lower bitrates/sample rates than that.
+//
+// IMPORTANT cross-platform consistency note: RecordingPresets.LOW_QUALITY
+// was NOT usable here even though it looks like the obvious choice --
+// it uses a DIFFERENT container/codec per platform (.3gp/amr_nb on
+// Android vs .m4a/AAC on iOS), which would have broken the single
+// hardcoded 'audio/m4a' mime type the receiving side uses to build a
+// playable data URI. Defined a custom preset instead: same .m4a/AAC
+// container on both platforms, just tuned down for voice -- mono,
+// 22050Hz (well above telephone-quality 8kHz, well below full-fidelity
+// 44.1kHz), 32kbps. Roughly a 4x reduction in bytes-per-second versus
+// HIGH_QUALITY.
+const VOICE_RECORDING_OPTIONS: RecordingOptions = {
+  extension: '.m4a',
+  sampleRate: 22050,
+  numberOfChannels: 1,
+  bitRate: 32000,
+  android: {
+    outputFormat: 'mpeg4',
+    audioEncoder: 'aac',
+  },
+  ios: {
+    outputFormat: 'aac ',
+    audioQuality: 0x60, // AudioQuality.HIGH -- fine at this bitrate/mono, MAX is unnecessary overhead
+    linearPCMBitDepth: 16,
+    linearPCMIsBigEndian: false,
+    linearPCMIsFloat: false,
+  },
+  web: {
+    mimeType: 'audio/webm',
+    bitsPerSecond: 32000,
+  },
+};
 
 interface UsePTTReturn {
   transmitting: boolean;
@@ -89,9 +129,16 @@ export function usePTT(): UsePTTReturn {
         case 'audio': {
           // Play incoming audio chunk
           setLastHeard(msg.callSign);
+          const tReceived = Date.now();
           try {
-            // Decode base64 to URI
-            const uri = `data:audio/wav;base64,${msg.data}`;
+            // Decode base64 to a data URI. Real bug found while investigating
+            // playback latency: RecordingPresets.HIGH_QUALITY actually
+            // records .m4a (MPEG-4 AAC), not WAV -- this was hardcoded to
+            // 'audio/wav', a real MIME-type mismatch. Some players tolerate
+            // it via content-sniffing (which is itself extra probing work
+            // before playback can start), some don't. Fixed to match the
+            // real recorded format.
+            const uri = `data:audio/m4a;base64,${msg.data}`;
             // Release the previous player before creating a new one --
             // expo-audio's imperative players are not auto-garbage-collected
             // like expo-av's Audio.Sound.createAsync results were.
@@ -99,6 +146,17 @@ export function usePTT(): UsePTTReturn {
             const player = createAudioPlayer(uri);
             playerRef.current = player;
             player.play();
+            // TEMP instrumentation for diagnosing perceived delay -- remove
+            // once the real latency budget is understood and settled.
+            // Uses the relay server's own timestamps (serverReceivedAt/
+            // serverRelayedAt) to separate real network+relay time from
+            // local decode/playback-start time, instead of guessing.
+            const tPlaybackStarted = Date.now();
+            console.log(
+              `[latency] payload ${msg.data?.length ?? 0} b64 chars | ` +
+              `server relay->client receive: ${msg.serverRelayedAt ? tReceived - msg.serverRelayedAt : 'n/a'}ms | ` +
+              `client receive->playback start: ${tPlaybackStarted - tReceived}ms`
+            );
           } catch (e) {
             console.error('Playback error:', e);
           }
@@ -158,7 +216,7 @@ export function usePTT(): UsePTTReturn {
         return;
       }
 
-      const recorder = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
+      const recorder = new AudioModule.AudioRecorder(VOICE_RECORDING_OPTIONS);
       recorderRef.current = recorder;
       await recorder.prepareToRecordAsync();
       recorder.record();
@@ -173,11 +231,13 @@ export function usePTT(): UsePTTReturn {
   }, [setupAudio, transmitting]);
 
   const stopTransmit = useCallback(async () => {
+    const tRelease = Date.now();
     try {
       const recorder = recorderRef.current;
       if (!recorder) return;
 
       await recorder.stop();
+      const tStopped = Date.now();
       const uri = recorder.uri;
       recorderRef.current = null;
       setTransmitting(false);
@@ -186,19 +246,29 @@ export function usePTT(): UsePTTReturn {
       wsRef.current?.send(JSON.stringify({ type: 'ptt_end' }));
 
       if (uri && wsRef.current?.readyState === WebSocket.OPEN) {
-        // Read the audio file as base64
-        const response = await fetch(uri);
-        const blob = await response.blob();
-
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64 = (reader.result as string).split(',')[1];
+        // Direct native base64 read via expo-file-system's File class --
+        // real, measured latency fix. The previous fetch(uri) ->
+        // response.blob() -> FileReader.readAsDataURL() chain was flagged
+        // by React Native's own runtime warning as a slow path (it copies
+        // the response into RN's Blob store, then re-encodes through
+        // FileReader on top of that). File.base64Sync() reads the file
+        // and encodes it in one synchronous native call -- no Blob
+        // store copy, no FileReader event round-trip through the bridge.
+        try {
+          const file = new File(uri);
+          const base64 = file.base64Sync();
+          const tEncoded = Date.now();
           wsRef.current?.send(JSON.stringify({
             type: 'audio',
             data: base64,
           }));
-        };
-        reader.readAsDataURL(blob);
+          const tSent = Date.now();
+          // TEMP instrumentation for diagnosing perceived delay -- remove
+          // once the real latency budget is understood and settled.
+          console.log(`[latency] release->recorder.stop: ${tStopped - tRelease}ms, stop->base64: ${tEncoded - tStopped}ms, base64->ws.send: ${tSent - tEncoded}ms, total local: ${tSent - tRelease}ms, ${base64.length} b64 chars`);
+        } catch (e) {
+          console.error('Failed to read recording as base64:', e);
+        }
       }
     } catch (e) {
       console.error('Failed to stop recording:', e);

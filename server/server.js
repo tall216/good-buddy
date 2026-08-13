@@ -83,6 +83,11 @@ wss.on('connection', (ws) => {
         if (!sender) return;
 
         const chunk = msg.data; // base64-encoded audio
+        // TEMP instrumentation for diagnosing perceived PTT delay --
+        // real server-side receive timestamp, sent back to every relayed
+        // client so the receiving app can compute true end-to-end network
+        // + relay time, not just infer it from client-only logs.
+        const serverReceivedAt = Date.now();
         let relayed = 0;
 
         wss.clients.forEach((clientWs) => {
@@ -101,6 +106,8 @@ wss.on('connection', (ws) => {
               type: 'audio',
               callSign: sender.callSign,
               data: chunk,
+              serverReceivedAt,
+              serverRelayedAt: Date.now(),
             }));
             relayed++;
           }
