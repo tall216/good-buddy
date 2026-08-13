@@ -4,57 +4,57 @@ import {
   AudioModule,
   type AudioRecorder,
   type AudioPlayer,
+  type AudioStream,
+  type AudioStreamBuffer,
   type RecordingOptions,
   createAudioPlayer,
   setAudioModeAsync,
   requestRecordingPermissionsAsync,
 } from 'expo-audio';
-import { File } from 'expo-file-system';
+import { File, Paths } from 'expo-file-system';
 
 // WebSocket relay server URL
 const RELAY_URL = process.env.EXPO_PUBLIC_RELAY_URL || 'ws://localhost:8080';
 
-// Voice-tuned recording preset. Real latency fix: the app was using
-// RecordingPresets.HIGH_QUALITY (44.1kHz stereo AAC @ 128kbps) for a
-// push-to-talk voice channel, not music -- see this file's git history
-// for that fix's detail.
+// REAL BUG, ROOT-CAUSED AND CONFIRMED via ffprobe/ffmpeg analysis of
+// actual recorded files pulled directly off a physical Android device
+// (Galaxy A42, Android 12) via adb + run-as: every single
+// Android-recorded MediaRecorder-based file -- tried across THREE
+// different container/codec combinations (.m4a/AAC, .3gp/AMR-NB) and
+// TWO storage directories (cache, document) -- came out missing its
+// container trailer (moov atom / equivalent), 100% reproducible,
+// independent of recording duration (confirmed via real timing
+// instrumentation). Investigated expo-audio's Android Kotlin source
+// (AudioRecorder.kt): this is a native MediaRecorder.stop() finalization
+// failure on this specific device/SDK combination that no JS-reachable
+// config change can fix, since it happens in already-compiled native
+// code.
 //
-// REAL BUG FOUND AND ROOT-CAUSED via ffprobe analysis of actual recorded
-// files pulled off a physical Android device (Galaxy A42, Android 12) via
-// adb + run-as: every single Android-recorded .m4a/.mp4 file -- with
-// EITHER this custom preset OR the original built-in HIGH_QUALITY preset,
-// confirmed via git history timestamps that a corrupted file predates
-// this preset's introduction -- had valid ftyp/mdat boxes but was
-// completely missing its moov atom (the container trailer with all
-// seek/duration metadata). 100% reproducible, not size- or
-// duration-related (confirmed via real timing instrumentation: a genuine
-// 2736ms recording produced the identical corruption as very short ones).
-// Investigated the actual expo-audio Android Kotlin source
-// (AudioRecorder.kt) and found this specific device/SDK combination
-// still exhibits data loss on MediaRecorder.stop() even though status
-// reports hasError: false -- MP4/M4A's atom-based container requires a
-// clean trailer write on stop() to be valid at all, and something in
-// this environment (an OEM MediaRecorder quirk, per multiple similar
-// real-world reports found via research) isn't reliably completing that
-// write. 3GP does not have this same fragility -- its container format
-// doesn't depend on a single trailer write to remain parseable. Real,
-// pragmatic fix: give each platform the recording options its own native
-// MediaRecorder/AVAudioRecorder handles most reliably, rather than
-// forcing a single shared container. iOS keeps .m4a/AAC (proven reliable
-// via extensive live cross-platform testing this session). Android
-// switches to .3gp/AMR-NB. The two platforms' outputs are no longer
-// byte-compatible, so the WebSocket message now tags which format
-// produced each chunk (see 'format' field below) and the receiving side
-// builds its playback data URI from that instead of a single hardcoded
-// MIME type.
+// REAL FIX: stopped using MediaRecorder-based file recording
+// (AudioRecorder) on Android entirely. Switched to AudioStream --
+// expo-audio's OTHER, completely independent native recording API,
+// backed by android.media.AudioRecord (confirmed via its own Kotlin
+// source) instead of MediaRecorder. AudioRecord delivers raw PCM
+// samples directly via a live buffer callback; there is no encoder, no
+// muxer, and no container trailer of any kind to fail to write --
+// structurally not the same class of bug. This app builds a minimal,
+// valid WAV file from the collected PCM buffers itself (see
+// buildWavFile below) rather than depending on a native container
+// writer at all.
+//
+// iOS is NOT switched -- extensive live cross-platform testing this
+// session proved AudioRecorder/.m4a genuinely reliable on iOS (real
+// bidirectional relay confirmed working, independently verified via the
+// relay server's own logs). Only Android, where the actual confirmed bug
+// lives, gets the AudioStream/WAV path.
 const VOICE_RECORDING_OPTIONS: RecordingOptions = {
-  extension: Platform.OS === 'android' ? '.3gp' : '.m4a',
-  sampleRate: Platform.OS === 'android' ? 8000 : 22050,
+  extension: '.m4a',
+  sampleRate: 22050,
   numberOfChannels: 1,
-  bitRate: Platform.OS === 'android' ? 12200 : 32000,
+  bitRate: 32000,
   android: {
-    outputFormat: '3gp',
-    audioEncoder: 'amr_nb',
+    outputFormat: 'mpeg4',
+    audioEncoder: 'aac',
   },
   ios: {
     outputFormat: 'aac ',
@@ -69,12 +69,63 @@ const VOICE_RECORDING_OPTIONS: RecordingOptions = {
   },
 };
 
+// AudioStream capture settings for Android's raw-PCM path. 16kHz mono
+// int16 is a real, deliberate choice for voice PTT -- well above
+// telephone-quality intelligibility (8kHz), while keeping the WAV file
+// small (32000 bytes/sec uncompressed, vs. the much larger footprint
+// full 44.1kHz PCM would produce for the same latency-sensitive
+// base64-encode-and-send path this app already optimized once this
+// session).
+const ANDROID_STREAM_SAMPLE_RATE = 16000;
+const ANDROID_STREAM_CHANNELS = 1;
+const BYTES_PER_SAMPLE = 2; // int16
+
+/**
+ * Builds a minimal, valid, playable WAV file (RIFF/WAVE, PCM format 1)
+ * from raw int16 PCM sample data. WAV's header is a fixed, well-known
+ * 44-byte structure with no equivalent "finalize on stop" step that can
+ * fail -- the entire file is valid the instant these bytes exist, which
+ * is the whole point of this fix relative to MediaRecorder's containers.
+ */
+function buildWavFile(pcmData: Uint8Array, sampleRate: number, channels: number): Uint8Array {
+  const byteRate = sampleRate * channels * BYTES_PER_SAMPLE;
+  const blockAlign = channels * BYTES_PER_SAMPLE;
+  const dataSize = pcmData.byteLength;
+  const header = new Uint8Array(44);
+  const view = new DataView(header.buffer);
+
+  // RIFF chunk descriptor
+  header.set([0x52, 0x49, 0x46, 0x46], 0); // "RIFF"
+  view.setUint32(4, 36 + dataSize, true); // ChunkSize
+  header.set([0x57, 0x41, 0x56, 0x45], 8); // "WAVE"
+
+  // fmt subchunk
+  header.set([0x66, 0x6d, 0x74, 0x20], 12); // "fmt "
+  view.setUint32(16, 16, true); // Subchunk1Size (16 for PCM)
+  view.setUint16(20, 1, true); // AudioFormat (1 = PCM)
+  view.setUint16(22, channels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, BYTES_PER_SAMPLE * 8, true); // BitsPerSample
+
+  // data subchunk
+  header.set([0x64, 0x61, 0x74, 0x61], 36); // "data"
+  view.setUint32(40, dataSize, true);
+
+  const wav = new Uint8Array(44 + dataSize);
+  wav.set(header, 0);
+  wav.set(pcmData, 44);
+  return wav;
+}
+
 // MIME type to use when building a playable data URI, matched to the
-// ACTUAL format this platform records in (see VOICE_RECORDING_OPTIONS
-// above for why these differ per platform).
-const RECORDED_AUDIO_FORMAT = Platform.OS === 'android' ? '3gp' : 'm4a';
+// ACTUAL format this platform records in. Android now records raw PCM
+// via AudioStream and wraps it in a real WAV file itself (see
+// buildWavFile above); iOS still uses AudioRecorder's .m4a/AAC output.
+const RECORDED_AUDIO_FORMAT = Platform.OS === 'android' ? 'wav' : 'm4a';
 const AUDIO_MIME_BY_FORMAT: Record<string, string> = {
-  '3gp': 'audio/3gpp',
+  wav: 'audio/wav',
   m4a: 'audio/m4a',
 };
 
@@ -98,6 +149,11 @@ export function usePTT(): UsePTTReturn {
   // wall-clock recording duration to check whether adb-synthesized touch
   // presses are registering as much shorter holds than requested.
   const recordStartTimeRef = useRef<number | null>(null);
+
+  // Android-only real-time PCM capture state (see VOICE_RECORDING_OPTIONS
+  // comment above for the full root-cause story on why this exists).
+  const streamRef = useRef<AudioStream | null>(null);
+  const pcmChunksRef = useRef<Uint8Array[]>([]);
 
   // Shared across connect()/disconnect() -- see the real bug this fixes
   // in disconnect()'s comment below.
@@ -313,6 +369,18 @@ export function usePTT(): UsePTTReturn {
     wsRef.current = null;
     playerRef.current?.remove();
     playerRef.current = null;
+    // Real cleanup for the Android AudioStream path -- if the screen
+    // unmounts mid-transmission, stop and release the native stream
+    // instead of leaking it (matches the same discipline applied to
+    // AudioRecorder elsewhere in this file).
+    try {
+      streamRef.current?.stop();
+      streamRef.current?.release();
+    } catch {
+      // already released or never fully constructed -- fine to ignore
+    }
+    streamRef.current = null;
+    pcmChunksRef.current = [];
   }, []);
 
   const startTransmit = useCallback(async () => {
@@ -320,7 +388,7 @@ export function usePTT(): UsePTTReturn {
     // mid-setup (e.g. rapid double-tap) -- creating a second AudioRecorder
     // before the first is prepared is another path to the same
     // INVALID_STATE_ERR seen on iOS.
-    if (recorderRef.current || transmitting) return;
+    if (recorderRef.current || streamRef.current || transmitting) return;
 
     try {
       await setupAudio();
@@ -331,10 +399,29 @@ export function usePTT(): UsePTTReturn {
         return;
       }
 
-      const recorder = new AudioModule.AudioRecorder(VOICE_RECORDING_OPTIONS);
-      recorderRef.current = recorder;
-      await recorder.prepareToRecordAsync();
-      recorder.record();
+      if (Platform.OS === 'android') {
+        // Real fix for the moov-atom corruption bug -- see the big
+        // comment on VOICE_RECORDING_OPTIONS above for full root-cause
+        // detail. Raw PCM capture via AudioStream, no file/container
+        // involved until this app builds one itself in stopTransmit.
+        pcmChunksRef.current = [];
+        const stream = new AudioModule.AudioStream({
+          sampleRate: ANDROID_STREAM_SAMPLE_RATE,
+          channels: ANDROID_STREAM_CHANNELS,
+          encoding: 'int16',
+        });
+        streamRef.current = stream;
+        stream.addListener('audioStreamBuffer', (buffer: AudioStreamBuffer) => {
+          pcmChunksRef.current.push(new Uint8Array(buffer.data));
+        });
+        await stream.start();
+      } else {
+        const recorder = new AudioModule.AudioRecorder(VOICE_RECORDING_OPTIONS);
+        recorderRef.current = recorder;
+        await recorder.prepareToRecordAsync();
+        recorder.record();
+      }
+
       recordStartTimeRef.current = Date.now();
       setTransmitting(true);
 
@@ -357,12 +444,96 @@ export function usePTT(): UsePTTReturn {
         // already released or never fully constructed -- fine to ignore
       }
       recorderRef.current = null;
+      try {
+        streamRef.current?.stop();
+        streamRef.current?.release();
+      } catch {
+        // already released or never fully constructed -- fine to ignore
+      }
+      streamRef.current = null;
     }
   }, [setupAudio, transmitting]);
 
   const stopTransmit = useCallback(async () => {
     const tRelease = Date.now();
     const heldForMs = recordStartTimeRef.current ? tRelease - recordStartTimeRef.current : null;
+
+    // Shared send path -- used by both the Android (WAV) and iOS (M4A)
+    // branches below once each has a base64-encoded payload ready.
+    const sendAudio = (base64: string, tStopped: number) => {
+      wsRef.current?.send(JSON.stringify({
+        type: 'audio',
+        data: base64,
+        format: RECORDED_AUDIO_FORMAT,
+      }));
+      const tSent = Date.now();
+      // TEMP instrumentation for diagnosing perceived delay -- remove
+      // once the real latency budget is understood and settled.
+      console.log(`[latency] held for: ${heldForMs}ms, release->stop: ${tStopped - tRelease}ms, stop->base64: ${tSent - tStopped}ms, total local: ${tSent - tRelease}ms, ${base64.length} b64 chars`);
+    };
+
+    if (Platform.OS === 'android') {
+      // Real fix for the moov-atom corruption bug -- see the big comment
+      // on VOICE_RECORDING_OPTIONS above for full root-cause detail.
+      // AudioStream/AudioRecord delivers raw PCM with no file or
+      // container involved at all, so there is nothing here that can
+      // fail to "finalize" the way MediaRecorder.stop() did.
+      try {
+        const stream = streamRef.current;
+        if (!stream) return;
+
+        stream.stop();
+        const tStopped = Date.now();
+
+        const totalLength = pcmChunksRef.current.reduce((sum, c) => sum + c.byteLength, 0);
+        const pcmData = new Uint8Array(totalLength);
+        let offset = 0;
+        for (const chunk of pcmChunksRef.current) {
+          pcmData.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        pcmChunksRef.current = [];
+
+        try {
+          stream.release();
+        } catch {
+          // already released -- fine to ignore
+        }
+        streamRef.current = null;
+        setTransmitting(false);
+
+        // Notify relay
+        wsRef.current?.send(JSON.stringify({ type: 'ptt_end' }));
+
+        if (totalLength > 0 && wsRef.current?.readyState === WebSocket.OPEN) {
+          const wavBytes = buildWavFile(pcmData, ANDROID_STREAM_SAMPLE_RATE, ANDROID_STREAM_CHANNELS);
+
+          // Write the WAV bytes to a real file via expo-file-system so
+          // File.base64Sync() (the same proven-fast path used for the
+          // M4A side) can encode it -- avoids writing a second, separate
+          // base64 encoder for this one case.
+          const tempFile = new File(Paths.cache, `ptt-${Date.now()}.wav`);
+          tempFile.write(wavBytes);
+          const base64 = tempFile.base64Sync();
+          try {
+            tempFile.delete();
+          } catch {
+            // best-effort cleanup, not critical
+          }
+
+          sendAudio(base64, tStopped);
+        }
+      } catch (e) {
+        console.error('Failed to stop Android audio stream:', e);
+        setTransmitting(false);
+      }
+      return;
+    }
+
+    // iOS path -- AudioRecorder/.m4a, proven reliable via extensive live
+    // cross-platform testing this session. Unchanged from the earlier
+    // fix that addressed the recurring INVALID_STATE_ERR (see comments
+    // in startTransmit's catch block for that story).
     try {
       const recorder = recorderRef.current;
       if (!recorder) return;
@@ -372,27 +543,12 @@ export function usePTT(): UsePTTReturn {
       // Android-recorded .m4a had valid ftyp/mdat boxes but NO moov atom
       // -- 100% reproducible, not size- or duration-related. Root-caused
       // to Android's native MediaRecorder.stop() in expo-audio's own
-      // Kotlin source (AudioRecorder.kt): when the native stop() call
-      // throws a RuntimeException (a real, documented MediaRecorder
-      // behavior), the catch block swallows it, calls reset()
-      // (release()) anyway, and the JS-side stop() promise still
-      // resolves normally -- so this code was blindly trusting
-      // recorder.uri as if the file were valid, with zero way to know
-      // the native stop actually failed to finalize the container.
-      // expo-audio DOES expose this via a real event
-      // (recordingStatusUpdate, with hasError/error/url fields) that
-      // this code was never listening for. Fixed by awaiting that
-      // event instead of trusting the bare stop() resolution + .uri.
-      // Real, documented Android platform behavior (confirmed via
-      // multiple independent real-world reports, not guessed): calling
-      // MediaRecorder.stop() less than ~1 second after start() reliably
-      // throws RuntimeException("stop failed.") on many devices/OEM
-      // builds -- there isn't enough buffered audio for the encoder to
-      // finalize a valid container. This is a real, separate, additive
-      // cause alongside the still-open moov-atom investigation (that one
-      // reproduced even on long holds; THIS one is specifically about
-      // quick taps). Enforce a floor so a fast tap-and-release doesn't
-      // hand the OS an impossible timing window.
+      // Kotlin source (AudioRecorder.kt) -- see VOICE_RECORDING_OPTIONS
+      // comment above for the full story and the eventual real fix
+      // (switching Android off MediaRecorder entirely). This iOS branch
+      // never had that bug, but keeps the same defensive status-event
+      // check on principle -- trusting a bare .uri after stop() was the
+      // root mistake regardless of platform.
       const MIN_RECORDING_MS = 1200;
       if (heldForMs !== null && heldForMs < MIN_RECORDING_MS) {
         await new Promise((resolve) => setTimeout(resolve, MIN_RECORDING_MS - heldForMs));
@@ -443,16 +599,7 @@ export function usePTT(): UsePTTReturn {
         try {
           const file = new File(uri);
           const base64 = file.base64Sync();
-          const tEncoded = Date.now();
-          wsRef.current?.send(JSON.stringify({
-            type: 'audio',
-            data: base64,
-            format: RECORDED_AUDIO_FORMAT,
-          }));
-          const tSent = Date.now();
-          // TEMP instrumentation for diagnosing perceived delay -- remove
-          // once the real latency budget is understood and settled.
-          console.log(`[latency] held for: ${heldForMs}ms, release->recorder.stop: ${tStopped - tRelease}ms, stop->base64: ${tEncoded - tStopped}ms, base64->ws.send: ${tSent - tEncoded}ms, total local: ${tSent - tRelease}ms, ${base64.length} b64 chars`);
+          sendAudio(base64, tStopped);
         } catch (e) {
           console.error('Failed to read recording as base64:', e);
         }
