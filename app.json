@@ -14,6 +14,7 @@
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Good Buddy uses your location to find other CB users nearby so you can talk to them. Your exact location is never shown to other users — only your approximate distance.",
         "NSMicrophoneUsageDescription": "Good Buddy needs the microphone to transmit your voice when you press and hold the Push-to-Talk button.",
+        "ITSAppUsesNonExemptEncryption": false,
         "UIBackgroundModes": []
       }
     },
