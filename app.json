@@ -44,7 +44,9 @@
         {
           "locationWhenInUsePermission": "Good Buddy uses your location to find other CB users nearby so you can talk to them. Your exact location is never shown to other users — only your approximate distance."
         }
-      ]
+      ],
+      "expo-audio",
+      "expo-asset"
     ],
     "extra": {
       "eas": {

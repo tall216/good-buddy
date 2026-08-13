@@ -1,5 +1,13 @@
 import { useRef, useCallback, useState } from 'react';
-import { Audio } from 'expo-av';
+import {
+  AudioModule,
+  type AudioRecorder,
+  type AudioPlayer,
+  createAudioPlayer,
+  setAudioModeAsync,
+  requestRecordingPermissionsAsync,
+  RecordingPresets,
+} from 'expo-audio';
 
 // WebSocket relay server URL
 const RELAY_URL = process.env.EXPO_PUBLIC_RELAY_URL || 'ws://localhost:8080';
@@ -16,19 +24,24 @@ interface UsePTTReturn {
 
 export function usePTT(): UsePTTReturn {
   const wsRef = useRef<WebSocket | null>(null);
-  const recordingRef = useRef<Audio.Recording | null>(null);
-  const soundRef = useRef<Audio.Sound | null>(null);
+  const recorderRef = useRef<AudioRecorder | null>(null);
+  const playerRef = useRef<AudioPlayer | null>(null);
   const [transmitting, setTransmitting] = useState(false);
   const [lastHeard, setLastHeard] = useState<string | null>(null);
 
-  // Set up audio mode for playback through speaker
+  // Set up audio mode for playback through speaker.
+  // Migrated from expo-av's setAudioModeAsync -- the old shape
+  // (allowsRecordingIOS, shouldDuckAndroid, playThroughEarpieceAndroid,
+  // staysActiveInBackground) doesn't exist on expo-audio's AudioMode type.
+  // interruptionMode: 'duckOthers' is the real replacement for
+  // shouldDuckAndroid. playThroughEarpieceAndroid has no direct
+  // equivalent -- expo-audio defaults to speaker routing, which is what
+  // this app wants (a CB radio should be heard, not held to your ear).
   const setupAudio = useCallback(async () => {
-    await Audio.setAudioModeAsync({
-      allowsRecordingIOS: true,
-      playsInSilentModeIOS: true,
-      staysActiveInBackground: false,
-      shouldDuckAndroid: true,
-      playThroughEarpieceAndroid: false, // speaker
+    await setAudioModeAsync({
+      allowsRecording: true,
+      playsInSilentMode: true,
+      interruptionMode: 'duckOthers',
     });
   }, []);
 
@@ -63,17 +76,13 @@ export function usePTT(): UsePTTReturn {
           try {
             // Decode base64 to URI
             const uri = `data:audio/wav;base64,${msg.data}`;
-            const { sound } = await Audio.Sound.createAsync(
-              { uri },
-              { shouldPlay: true }
-            );
-            soundRef.current = sound;
-
-            sound.setOnPlaybackStatusUpdate((status) => {
-              if (status.isLoaded && status.didJustFinish) {
-                sound.unloadAsync();
-              }
-            });
+            // Release the previous player before creating a new one --
+            // expo-audio's imperative players are not auto-garbage-collected
+            // like expo-av's Audio.Sound.createAsync results were.
+            playerRef.current?.remove();
+            const player = createAudioPlayer(uri);
+            playerRef.current = player;
+            player.play();
           } catch (e) {
             console.error('Playback error:', e);
           }
@@ -113,16 +122,24 @@ export function usePTT(): UsePTTReturn {
   const disconnect = useCallback(() => {
     wsRef.current?.close();
     wsRef.current = null;
+    playerRef.current?.remove();
+    playerRef.current = null;
   }, []);
 
   const startTransmit = useCallback(async () => {
     try {
       await setupAudio();
 
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
-      recordingRef.current = recording;
+      const { granted } = await requestRecordingPermissionsAsync();
+      if (!granted) {
+        console.error('Microphone permission denied');
+        return;
+      }
+
+      const recorder = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      recorderRef.current = recorder;
       setTransmitting(true);
 
       // Notify relay
@@ -134,12 +151,12 @@ export function usePTT(): UsePTTReturn {
 
   const stopTransmit = useCallback(async () => {
     try {
-      const recording = recordingRef.current;
-      if (!recording) return;
+      const recorder = recorderRef.current;
+      if (!recorder) return;
 
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
-      recordingRef.current = null;
+      await recorder.stop();
+      const uri = recorder.uri;
+      recorderRef.current = null;
       setTransmitting(false);
 
       // Notify relay
