@@ -29,7 +29,9 @@
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
-        "RECORD_AUDIO"
+        "RECORD_AUDIO",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
       ]
     },
     "web": {
@@ -42,6 +44,12 @@
           "locationWhenInUsePermission": "Good Buddy uses your location to find other CB users nearby so you can talk to them. Your exact location is never shown to other users — only your approximate distance."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "71e68f85-4cd7-4449-b532-cac3bb1226fc"
+      }
+    },
+    "owner": "runnercode"
   }
 }
