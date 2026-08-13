@@ -132,7 +132,7 @@ const AUDIO_MIME_BY_FORMAT: Record<string, string> = {
 interface UsePTTReturn {
   transmitting: boolean;
   lastHeard: string | null;
-  connect: (callSign: string, lat: number, lng: number, range: number) => void;
+  connect: (userId: string, callSign: string, lat: number, lng: number, range: number) => void;
   disconnect: () => void;
   startTransmit: () => Promise<void>;
   stopTransmit: () => Promise<void>;
@@ -216,7 +216,7 @@ export function usePTT(): UsePTTReturn {
     return audioSetupPromiseRef.current;
   }, []);
 
-  const connect = useCallback((callSign: string, lat: number, lng: number, range: number) => {
+  const connect = useCallback((userId: string, callSign: string, lat: number, lng: number, range: number) => {
     setupAudio();
     intentionallyClosedRef.current = false;
 
@@ -251,6 +251,7 @@ export function usePTT(): UsePTTReturn {
         reconnectAttempts = 0;
         ws.send(JSON.stringify({
           type: 'join',
+          userId,
           callSign,
           lat,
           lng,

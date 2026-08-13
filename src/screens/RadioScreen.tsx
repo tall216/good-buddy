@@ -11,6 +11,7 @@ import { colors, spacing, fonts, radii } from '../theme';
 import { Panel, LCDWell, Knob } from '../components/RadioChrome';
 import { useRadio } from '../lib/useRadio';
 import { usePTT } from '../lib/usePTT';
+import { usePushNotifications } from '../lib/usePushNotifications';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -24,6 +25,10 @@ interface Props {
 export default function RadioScreen({ callSign }: Props) {
   const [range, setRange] = useState(10);
   const [discoverable, setDiscoverable] = useState(true);
+  // Separate opt-in state from `discoverable` on purpose -- see
+  // usePushNotifications.ts's top comment for why these must not be
+  // conflated. Starts false; the user must explicitly tap the bell.
+  const [pushEnabled, setPushEnabled] = useState(false);
 
   const {
     userId,
@@ -43,6 +48,8 @@ export default function RadioScreen({ callSign }: Props) {
     stopTransmit,
     updateLocation,
   } = usePTT();
+
+  const { requestAndRegister, unregister } = usePushNotifications(userId);
 
   // Register with Supabase on mount
   useEffect(() => {
@@ -68,7 +75,7 @@ export default function RadioScreen({ callSign }: Props) {
     if (userId && location && !hasConnectedRef.current) {
       hasConnectedRef.current = true;
       const { latitude, longitude } = location.coords;
-      connect(callSign, latitude, longitude, range);
+      connect(userId, callSign, latitude, longitude, range);
     }
   }, [userId, location]);
 
@@ -127,6 +134,16 @@ export default function RadioScreen({ callSign }: Props) {
     const next = !discoverable;
     setDiscoverable(next);
     updateDiscoverable(next);
+  };
+
+  const togglePushNotifications = async () => {
+    if (pushEnabled) {
+      await unregister();
+      setPushEnabled(false);
+    } else {
+      const granted = await requestAndRegister();
+      setPushEnabled(granted);
+    }
   };
 
   const vuWidth = vuAnim.interpolate({
@@ -241,14 +258,30 @@ export default function RadioScreen({ callSign }: Props) {
 
       {/* Bottom controls */}
       <View style={styles.bottomControls}>
-        <TouchableOpacity
-          style={[styles.toggleButton, discoverable && styles.toggleOn]}
-          onPress={toggleDiscoverable}
-        >
-          <Text style={styles.toggleText}>
-            {discoverable ? 'ON AIR' : 'SILENT'}
-          </Text>
-        </TouchableOpacity>
+        <View style={styles.bottomToggleRow}>
+          <TouchableOpacity
+            style={[styles.toggleButton, discoverable && styles.toggleOn]}
+            onPress={toggleDiscoverable}
+          >
+            <Text style={styles.toggleText}>
+              {discoverable ? 'ON AIR' : 'SILENT'}
+            </Text>
+          </TouchableOpacity>
+
+          {/* Separate opt-in from ON AIR/SILENT on purpose -- see
+              usePushNotifications.ts's top comment. A real background
+              push alert is a bigger ask than just "discoverable", so
+              it gets its own explicit control rather than riding along
+              with the existing toggle. */}
+          <TouchableOpacity
+            style={[styles.toggleButton, pushEnabled && styles.toggleOn]}
+            onPress={togglePushNotifications}
+          >
+            <Text style={styles.toggleText}>
+              {pushEnabled ? '🔔 ALERTS ON' : '🔕 ALERTS OFF'}
+            </Text>
+          </TouchableOpacity>
+        </View>
 
         <View style={styles.knobRow}>
           <Knob rotation={-20} />
@@ -516,9 +549,13 @@ const styles = StyleSheet.create({
     marginTop: 'auto',
     marginBottom: spacing.lg,
   },
+  bottomToggleRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
   toggleButton: {
     paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.md,
     borderWidth: 1,
     borderColor: colors.redDim,
     borderRadius: radii.md,

@@ -60,6 +60,30 @@ export async function updateLocation(
   }
 }
 
+// Registers (or clears) this user's push token + opt-in flag. Called
+// once permission is granted/revoked -- see usePushNotifications.ts for
+// the real permission-request flow this backs. push_token is write-only
+// from the client's perspective: RLS blocks reading it back via a plain
+// SELECT (see 002_push_tokens.sql), so there's no getPushToken() here by
+// design -- only the relay server can ever read tokens back, and only
+// through the narrow get_push_tokens_for_users RPC for users it's
+// already decided are in range.
+export async function updatePushToken(
+  userId: string,
+  pushToken: string | null,
+  pushEnabled: boolean
+): Promise<void> {
+  const { error } = await supabase.rpc('update_push_token', {
+    p_id: userId,
+    p_push_token: pushToken,
+    p_push_enabled: pushEnabled,
+  });
+
+  if (error) {
+    console.error('Failed to update push token:', error);
+  }
+}
+
 export async function findNearbyUsers(
   lat: number,
   lng: number,

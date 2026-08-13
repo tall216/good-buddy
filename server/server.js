@@ -6,17 +6,41 @@
  * When a client sends an audio chunk, the server finds all clients
  * within the sender's range and relays the chunk to them.
  *
+ * Also handles real background push notifications: when a transmission
+ * happens, any NEARBY user who is currently discoverable/opted-in but
+ * NOT live-connected via WebSocket right now (backgrounded/closed app)
+ * gets a real Expo push notification instead of silently missing the
+ * transmission. Live-connected recipients already get the audio
+ * directly -- pushing them too would be redundant/annoying.
+ *
  * Deploy to Railway, Render, or Fly.io (free tiers work).
  * Run: node server.js
  * Default port: 8080 (set PORT env var to override)
  */
 
 const { WebSocketServer } = require('ws');
+const { createClient } = require('@supabase/supabase-js');
 
 const PORT = process.env.PORT || 8080;
 
+// Real design decision: uses the SAME anon key the client app already
+// ships with (EXPO_PUBLIC_SUPABASE_ANON_KEY) -- deliberately NOT the
+// service_role secret. get_push_tokens_for_users (see
+// supabase/migrations/002_push_tokens.sql) is a SECURITY DEFINER RPC
+// that's the one sanctioned path for this server to read push_token
+// values despite RLS blocking that column on a plain SELECT with the
+// anon key. No new secret to provision/rotate for this server.
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+let supabase = null;
+if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+  supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+} else {
+  console.warn('SUPABASE_URL/SUPABASE_ANON_KEY not set -- background push notifications disabled');
+}
+
 // Client state
-const clients = new Map(); // ws -> { callSign, lat, lng, range }
+const clients = new Map(); // ws -> { userId, callSign, lat, lng, range }
 
 // Haversine distance in miles
 function haversineMiles(lat1, lng1, lat2, lng2) {
@@ -29,6 +53,89 @@ function haversineMiles(lat1, lng1, lat2, lng2) {
     Math.sin(dLng / 2) * Math.sin(dLng / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
+}
+
+// Real, exact Expo push API -- confirmed via docs.expo.dev, no auth
+// required for basic sends, plain JSON POST. Fire-and-forget by
+// design: a failed/slow push must never block or delay the live
+// audio relay path above it. Errors are logged, not retried -- a
+// missed background alert is a real but non-critical degradation,
+// unlike a dropped live audio chunk.
+async function sendPushNotification(pushToken, senderCallSign) {
+  try {
+    const res = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'Accept-Encoding': 'gzip, deflate',
+      },
+      body: JSON.stringify({
+        to: pushToken,
+        title: 'Good Buddy',
+        body: `${senderCallSign} is transmitting nearby`,
+        channelId: 'nearby-transmissions',
+        priority: 'high',
+      }),
+    });
+    if (!res.ok) {
+      console.error(`Push send failed (${res.status}) for token ${pushToken.slice(0, 20)}...`);
+    }
+  } catch (e) {
+    console.error('Push send error:', e.message);
+  }
+}
+
+// For a sender's transmission, find nearby users who are OPTED IN to
+// push (push_enabled + a token on file) but NOT currently among the
+// live WebSocket recipients that just got the real audio -- those
+// users are backgrounded/app-closed, exactly the case this feature
+// targets. connectedUserIds is the set that already got the live
+// relay (see the 'audio' case below) -- deliberately excluded here so
+// a foregrounded user never gets both the live audio AND a redundant
+// push.
+async function notifyBackgroundedNearbyUsers(sender, connectedUserIds) {
+  if (!supabase) return;
+
+  try {
+    // Real RPC call (find_nearby_users), same one the client itself
+    // uses for its "GOOD BUDDIES IN RANGE" count -- reuses the exact
+    // same geospatial logic rather than re-deriving it here, so
+    // "nearby" means the same thing for push as it does for live
+    // relay/discovery.
+    const { data: nearby, error } = await supabase.rpc('find_nearby_users', {
+      p_lat: sender.lat,
+      p_lng: sender.lng,
+      p_range_miles: sender.range,
+      p_exclude_id: sender.userId,
+    });
+    if (error) {
+      console.error('find_nearby_users (push path) failed:', error.message);
+      return;
+    }
+
+    const backgroundedIds = (nearby || [])
+      .map((u) => u.id)
+      .filter((id) => !connectedUserIds.has(id));
+    if (backgroundedIds.length === 0) return;
+
+    const { data: tokenRows, error: tokenError } = await supabase.rpc('get_push_tokens_for_users', {
+      p_user_ids: backgroundedIds,
+    });
+    if (tokenError) {
+      console.error('get_push_tokens_for_users failed:', tokenError.message);
+      return;
+    }
+
+    for (const row of tokenRows || []) {
+      sendPushNotification(row.push_token, sender.callSign);
+    }
+    if ((tokenRows || []).length > 0) {
+      console.log(`${sender.callSign} → ${tokenRows.length} background push(es)`);
+    }
+  } catch (e) {
+    console.error('notifyBackgroundedNearbyUsers error:', e.message);
+  }
 }
 
 const wss = new WebSocketServer({ port: PORT });
@@ -73,6 +180,7 @@ wss.on('connection', (ws) => {
 
         // Client registers with location
         clients.set(ws, {
+          userId: msg.userId || null,
           callSign: msg.callSign || 'Unknown',
           lat: msg.lat,
           lng: msg.lng,
@@ -111,6 +219,11 @@ wss.on('connection', (ws) => {
         // + relay time, not just infer it from client-only logs.
         const serverReceivedAt = Date.now();
         let relayed = 0;
+        // Real userIds who got the LIVE audio via WebSocket this round
+        // -- passed to notifyBackgroundedNearbyUsers below so it never
+        // also pushes a redundant notification to someone who's
+        // foregrounded and already hearing this transmission directly.
+        const connectedUserIds = new Set();
 
         wss.clients.forEach((clientWs) => {
           if (clientWs === ws || clientWs.readyState !== 1) return;
@@ -140,11 +253,22 @@ wss.on('connection', (ws) => {
               serverRelayedAt: Date.now(),
             }));
             relayed++;
+            if (target.userId) connectedUserIds.add(target.userId);
           }
         });
 
         if (relayed > 0) {
           console.log(`${sender.callSign} → ${relayed} listener(s)`);
+        }
+
+        // Real background push path -- fire-and-forget, never awaited
+        // here so a slow Supabase/Expo round-trip can't delay the next
+        // audio chunk this connection sends. Gated on sender.userId
+        // existing at all (older/dev-tethered clients that predate the
+        // userId-in-join change simply won't trigger this -- degrades
+        // gracefully rather than erroring).
+        if (sender.userId) {
+          notifyBackgroundedNearbyUsers(sender, connectedUserIds);
         }
         break;
       }

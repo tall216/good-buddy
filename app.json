@@ -46,7 +46,14 @@
         }
       ],
       "expo-audio",
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/android-icon-monochrome.png",
+          "color": "#ffa620"
+        }
+      ]
     ],
     "extra": {
       "eas": {
