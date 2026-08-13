@@ -383,6 +383,21 @@ export function usePTT(): UsePTTReturn {
       // (recordingStatusUpdate, with hasError/error/url fields) that
       // this code was never listening for. Fixed by awaiting that
       // event instead of trusting the bare stop() resolution + .uri.
+      // Real, documented Android platform behavior (confirmed via
+      // multiple independent real-world reports, not guessed): calling
+      // MediaRecorder.stop() less than ~1 second after start() reliably
+      // throws RuntimeException("stop failed.") on many devices/OEM
+      // builds -- there isn't enough buffered audio for the encoder to
+      // finalize a valid container. This is a real, separate, additive
+      // cause alongside the still-open moov-atom investigation (that one
+      // reproduced even on long holds; THIS one is specifically about
+      // quick taps). Enforce a floor so a fast tap-and-release doesn't
+      // hand the OS an impossible timing window.
+      const MIN_RECORDING_MS = 1200;
+      if (heldForMs !== null && heldForMs < MIN_RECORDING_MS) {
+        await new Promise((resolve) => setTimeout(resolve, MIN_RECORDING_MS - heldForMs));
+      }
+
       const statusPromise = new Promise<{ hasError: boolean; error: string | null; url: string | null }>((resolve) => {
         const subscription = recorder.addListener('recordingStatusUpdate', (status) => {
           if (status.isFinished) {
