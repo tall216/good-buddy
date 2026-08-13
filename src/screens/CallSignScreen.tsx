@@ -8,7 +8,8 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { colors, spacing, fonts } from '../theme';
+import { colors, spacing, fonts, radii } from '../theme';
+import { Panel, LCDWell, Knob } from '../components/RadioChrome';
 
 const FUN_CALL_SIGNS = [
   'Rubber Duck',
@@ -52,8 +53,8 @@ export default function CallSignScreen({ onSetCallSign }: Props) {
       style={styles.root}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      {/* Speaker grille decoration */}
-      <View style={styles.grille}>
+      {/* Speaker grille -- real chassis panel, not a flat box */}
+      <Panel style={styles.grille} inset>
         {Array.from({ length: 6 }).map((_, i) => (
           <View key={i} style={styles.grilleRow}>
             {Array.from({ length: 8 }).map((_, j) => (
@@ -61,17 +62,17 @@ export default function CallSignScreen({ onSetCallSign }: Props) {
             ))}
           </View>
         ))}
-      </View>
+      </Panel>
 
       {/* Title */}
       <Text style={styles.title}>GOOD BUDDY</Text>
       <Text style={styles.subtitle}>CB RADIO</Text>
 
-      {/* Frequency display */}
-      <View style={styles.freqDisplay}>
+      {/* Frequency display -- real backlit LCD well */}
+      <LCDWell style={styles.freqDisplay}>
         <Text style={styles.freqText}>CH 19</Text>
         <Text style={styles.freqSmall}>27.185 MHz</Text>
-      </View>
+      </LCDWell>
 
       {/* Call sign input */}
       <View style={styles.inputSection}>
@@ -102,18 +103,12 @@ export default function CallSignScreen({ onSetCallSign }: Props) {
         <Text style={styles.keyUpSub}>Hit the airwaves</Text>
       </TouchableOpacity>
 
-      {/* Bottom decoration */}
+      {/* Bottom decoration -- real physical knobs */}
       <View style={styles.bottomBar}>
         <View style={styles.knobRow}>
-          <View style={styles.knob}>
-            <View style={styles.knobIndicator} />
-          </View>
-          <View style={styles.knob}>
-            <View style={styles.knobIndicator} />
-          </View>
-          <View style={styles.knob}>
-            <View style={styles.knobIndicator} />
-          </View>
+          <Knob rotation={-30} />
+          <Knob rotation={45} />
+          <Knob rotation={10} />
         </View>
         <Text style={styles.bottomText}>PUSH TO TALK • ADJUSTABLE RANGE</Text>
       </View>
@@ -124,19 +119,15 @@ export default function CallSignScreen({ onSetCallSign }: Props) {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: colors.bg,
+    backgroundColor: colors.chassisDark,
     alignItems: 'center',
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.xxl,
   },
   grille: {
     width: '80%',
-    backgroundColor: colors.grille,
-    borderRadius: 4,
     padding: spacing.sm,
     marginBottom: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
   },
   grilleRow: {
     flexDirection: 'row',
@@ -146,7 +137,7 @@ const styles = StyleSheet.create({
   grilleSlot: {
     width: 20,
     height: 4,
-    backgroundColor: colors.bg,
+    backgroundColor: colors.chassisDark,
     borderRadius: 1,
   },
   title: {
@@ -160,15 +151,11 @@ const styles = StyleSheet.create({
   subtitle: {
     fontFamily: fonts.mono,
     fontSize: 14,
-    color: colors.green,
+    color: colors.lcdGlow,
     letterSpacing: 8,
     marginBottom: spacing.lg,
   },
   freqDisplay: {
-    backgroundColor: colors.panel,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 4,
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.lg,
     alignItems: 'center',
@@ -178,13 +165,13 @@ const styles = StyleSheet.create({
   freqText: {
     fontFamily: fonts.display,
     fontSize: 28,
-    color: colors.green,
+    color: colors.lcdText,
     letterSpacing: 4,
   },
   freqSmall: {
     fontFamily: fonts.mono,
     fontSize: 10,
-    color: colors.greenDim,
+    color: colors.lcdGlowDim,
     letterSpacing: 2,
   },
   inputSection: {
@@ -204,7 +191,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.panel,
     borderWidth: 1,
     borderColor: colors.amber,
-    borderRadius: 4,
+    borderRadius: radii.md,
     padding: spacing.md,
     color: colors.amber,
     fontFamily: fonts.display,
@@ -218,7 +205,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     borderWidth: 1,
     borderColor: colors.greenDim,
-    borderRadius: 4,
+    borderRadius: radii.md,
   },
   diceText: {
     fontFamily: fonts.mono,
@@ -232,7 +219,7 @@ const styles = StyleSheet.create({
     borderRadius: 80,
     backgroundColor: colors.red,
     borderWidth: 4,
-    borderColor: '#881100',
+    borderColor: colors.redDim,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: spacing.xl,
@@ -245,7 +232,7 @@ const styles = StyleSheet.create({
   },
   keyUpDisabled: {
     backgroundColor: colors.redDim,
-    borderColor: '#330800',
+    borderColor: colors.chassisDark,
     elevation: 2,
     shadowOpacity: 0.1,
   },
@@ -272,22 +259,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: spacing.lg,
     marginBottom: spacing.md,
-  },
-  knob: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.knob,
-    borderWidth: 2,
-    borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  knobIndicator: {
-    width: 3,
-    height: 10,
-    backgroundColor: colors.amber,
-    borderRadius: 1,
   },
   bottomText: {
     fontFamily: fonts.mono,

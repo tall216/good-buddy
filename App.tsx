@@ -10,7 +10,7 @@ export default function App() {
   if (!callSign) {
     return (
       <View style={styles.root}>
-        <StatusBar barStyle="light-content" backgroundColor={colors.bg} />
+        <StatusBar barStyle="light-content" backgroundColor={colors.chassisDark} />
         <CallSignScreen onSetCallSign={setCallSign} />
       </View>
     );
@@ -18,7 +18,7 @@ export default function App() {
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor={colors.bg} />
+      <StatusBar barStyle="light-content" backgroundColor={colors.chassisDark} />
       <RadioScreen callSign={callSign} />
     </View>
   );
@@ -27,6 +27,6 @@ export default function App() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: colors.bg,
+    backgroundColor: colors.chassisDark,
   },
 });

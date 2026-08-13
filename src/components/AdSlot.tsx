@@ -18,7 +18,7 @@ const styles = StyleSheet.create({
   slot: {
     backgroundColor: colors.panel,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.borderDark,
     borderStyle: 'dashed',
     alignItems: 'center',
     justifyContent: 'center',

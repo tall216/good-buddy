@@ -7,7 +7,8 @@ import {
   Animated,
   Dimensions,
 } from 'react-native';
-import { colors, spacing, fonts } from '../theme';
+import { colors, spacing, fonts, radii } from '../theme';
+import { Panel, LCDWell, Knob } from '../components/RadioChrome';
 import { useRadio } from '../lib/useRadio';
 import { usePTT } from '../lib/usePTT';
 
@@ -138,16 +139,20 @@ export default function RadioScreen({ callSign }: Props) {
     <View style={styles.root}>
       {/* Top bar: call sign + status */}
       <View style={styles.topBar}>
-        <View style={styles.callSignBadge}>
-          <Text style={styles.callSignLabel}>HANDLE</Text>
-          <Text style={styles.callSignValue}>{callSign}</Text>
-        </View>
-        <View style={styles.statusBadge}>
-          <View style={[styles.statusDot, discoverable && styles.statusDotOn]} />
-          <Text style={styles.statusText}>
-            {discoverable ? 'ON AIR' : 'RADIO SILENT'}
-          </Text>
-        </View>
+        <Panel style={styles.callSignBadge} screws={false}>
+          <View style={styles.badgeInner}>
+            <Text style={styles.callSignLabel}>HANDLE</Text>
+            <Text style={styles.callSignValue}>{callSign}</Text>
+          </View>
+        </Panel>
+        <Panel style={styles.statusBadge} screws={false}>
+          <View style={styles.statusBadgeInner}>
+            <View style={[styles.statusDot, discoverable && styles.statusDotOn]} />
+            <Text style={styles.statusText}>
+              {discoverable ? 'ON AIR' : 'RADIO SILENT'}
+            </Text>
+          </View>
+        </Panel>
       </View>
 
       {/* Error display */}
@@ -158,7 +163,7 @@ export default function RadioScreen({ callSign }: Props) {
       )}
 
       {/* Speaker grille */}
-      <View style={styles.grille}>
+      <Panel style={styles.grille} inset>
         {Array.from({ length: 4 }).map((_, i) => (
           <View key={i} style={styles.grilleRow}>
             {Array.from({ length: 10 }).map((_, j) => (
@@ -166,34 +171,36 @@ export default function RadioScreen({ callSign }: Props) {
             ))}
           </View>
         ))}
-      </View>
+      </Panel>
 
-      {/* Frequency display */}
-      <View style={styles.freqPanel}>
+      {/* Frequency display -- real backlit LCD well */}
+      <LCDWell style={styles.freqPanel}>
         <Text style={styles.freqLabel}>FREQUENCY</Text>
         <Text style={styles.freqValue}>27.185</Text>
         <Text style={styles.freqUnit}>MHz</Text>
-      </View>
+      </LCDWell>
 
       {/* Range display */}
-      <View style={styles.rangePanel}>
-        <Text style={styles.rangeLabel}>RANGE</Text>
-        <TouchableOpacity onPress={cycleRange} style={styles.rangeValue}>
-          <Text style={styles.rangeNumber}>{range}</Text>
-          <Text style={styles.rangeUnit}>MI</Text>
-        </TouchableOpacity>
-        <View style={styles.rangeBar}>
-          {RANGE_OPTIONS.map((r) => (
-            <View
-              key={r}
-              style={[
-                styles.rangeSegment,
-                r <= range && styles.rangeSegmentActive,
-              ]}
-            />
-          ))}
+      <Panel style={styles.rangePanel} screws={false}>
+        <View style={styles.rangePanelInner}>
+          <Text style={styles.rangeLabel}>RANGE</Text>
+          <TouchableOpacity onPress={cycleRange} style={styles.rangeValue}>
+            <Text style={styles.rangeNumber}>{range}</Text>
+            <Text style={styles.rangeUnit}>MI</Text>
+          </TouchableOpacity>
+          <View style={styles.rangeBar}>
+            {RANGE_OPTIONS.map((r) => (
+              <View
+                key={r}
+                style={[
+                  styles.rangeSegment,
+                  r <= range && styles.rangeSegmentActive,
+                ]}
+              />
+            ))}
+          </View>
         </View>
-      </View>
+      </Panel>
 
       {/* VU Meter */}
       <View style={styles.vuMeter}>
@@ -244,12 +251,8 @@ export default function RadioScreen({ callSign }: Props) {
         </TouchableOpacity>
 
         <View style={styles.knobRow}>
-          <View style={styles.knob}>
-            <View style={styles.knobIndicator} />
-          </View>
-          <View style={styles.knob}>
-            <View style={styles.knobIndicator} />
-          </View>
+          <Knob rotation={-20} />
+          <Knob rotation={60} />
         </View>
       </View>
     </View>
@@ -259,7 +262,7 @@ export default function RadioScreen({ callSign }: Props) {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: colors.bg,
+    backgroundColor: colors.chassisDark,
     paddingHorizontal: spacing.md,
     paddingTop: spacing.lg,
   },
@@ -270,10 +273,9 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   callSignBadge: {
-    backgroundColor: colors.panel,
-    borderWidth: 1,
     borderColor: colors.amber,
-    borderRadius: 4,
+  },
+  badgeInner: {
     paddingVertical: spacing.xs,
     paddingHorizontal: spacing.md,
   },
@@ -289,13 +291,10 @@ const styles = StyleSheet.create({
     color: colors.amber,
     letterSpacing: 2,
   },
-  statusBadge: {
+  statusBadge: {},
+  statusBadgeInner: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.panel,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 4,
     paddingVertical: spacing.xs,
     paddingHorizontal: spacing.sm,
     gap: spacing.xs,
@@ -316,10 +315,10 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
   },
   errorBanner: {
-    backgroundColor: '#330000',
+    backgroundColor: colors.redDim,
     borderWidth: 1,
     borderColor: colors.red,
-    borderRadius: 4,
+    borderRadius: radii.md,
     padding: spacing.sm,
     marginBottom: spacing.sm,
   },
@@ -331,12 +330,8 @@ const styles = StyleSheet.create({
   },
   grille: {
     width: '100%',
-    backgroundColor: colors.grille,
-    borderRadius: 4,
     padding: spacing.sm,
     marginBottom: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
   },
   grilleRow: {
     flexDirection: 'row',
@@ -346,14 +341,10 @@ const styles = StyleSheet.create({
   grilleSlot: {
     width: 24,
     height: 5,
-    backgroundColor: colors.bg,
+    backgroundColor: colors.chassisDark,
     borderRadius: 1,
   },
   freqPanel: {
-    backgroundColor: colors.panel,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 4,
     padding: spacing.sm,
     alignItems: 'center',
     marginBottom: spacing.sm,
@@ -367,23 +358,21 @@ const styles = StyleSheet.create({
   freqValue: {
     fontFamily: fonts.display,
     fontSize: 32,
-    color: colors.green,
+    color: colors.lcdText,
     letterSpacing: 4,
   },
   freqUnit: {
     fontFamily: fonts.mono,
     fontSize: 10,
-    color: colors.greenDim,
+    color: colors.lcdGlowDim,
     letterSpacing: 2,
   },
   rangePanel: {
-    backgroundColor: colors.panel,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 4,
+    marginBottom: spacing.sm,
+  },
+  rangePanelInner: {
     padding: spacing.sm,
     alignItems: 'center',
-    marginBottom: spacing.sm,
   },
   rangeLabel: {
     fontFamily: fonts.mono,
@@ -417,7 +406,7 @@ const styles = StyleSheet.create({
   rangeSegment: {
     flex: 1,
     height: 4,
-    backgroundColor: colors.border,
+    backgroundColor: colors.borderDark,
     borderRadius: 1,
   },
   rangeSegmentActive: {
@@ -439,10 +428,10 @@ const styles = StyleSheet.create({
   vuTrack: {
     flex: 1,
     height: 8,
-    backgroundColor: colors.grille,
+    backgroundColor: colors.panelInset,
     borderRadius: 2,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.borderDark,
     overflow: 'hidden',
   },
   vuFill: {
@@ -488,7 +477,7 @@ const styles = StyleSheet.create({
     borderRadius: SCREEN_WIDTH * 0.25,
     backgroundColor: colors.red,
     borderWidth: 4,
-    borderColor: '#881100',
+    borderColor: colors.redDim,
     alignSelf: 'center',
     alignItems: 'center',
     justifyContent: 'center',
@@ -500,8 +489,8 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
   },
   pttActive: {
-    backgroundColor: '#ff2200',
-    borderColor: '#ff4400',
+    backgroundColor: colors.redBright,
+    borderColor: colors.redBright,
     elevation: 12,
     shadowOpacity: 0.6,
   },
@@ -532,7 +521,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     borderWidth: 1,
     borderColor: colors.redDim,
-    borderRadius: 4,
+    borderRadius: radii.md,
     backgroundColor: colors.panel,
   },
   toggleOn: {
@@ -547,21 +536,5 @@ const styles = StyleSheet.create({
   knobRow: {
     flexDirection: 'row',
     gap: spacing.md,
-  },
-  knob: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.knob,
-    borderWidth: 2,
-    borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  knobIndicator: {
-    width: 3,
-    height: 12,
-    backgroundColor: colors.amber,
-    borderRadius: 1,
   },
 });

@@ -1,24 +1,57 @@
-// Retro CB Radio color palette
+// Serious-transceiver color palette. Modeled on real amateur/CB radio
+// hardware (Yaesu/Kenwood/Uniden-style brushed aluminum chassis, backlit
+// LCD, physical control detailing) rather than a flat "retro" mockup.
 export const colors = {
-  bg: '#1a1a0a',           // dark olive-black (old radio chassis)
-  panel: '#2a2a15',        // slightly lighter panel
-  amber: '#ffb000',        // warm amber (displays, indicators)
-  amberDim: '#664400',     // dim amber (inactive)
-  green: '#00ff41',        // bright green (VU meter, signal)
-  greenDim: '#004410',     // dim green
-  red: '#cc2200',          // PTT button, warning
-  redDim: '#440800',       // dim red
-  text: '#d4c898',         // warm off-white text
-  textDim: '#6b6548',      // muted text
-  border: '#3a3a20',       // panel borders
-  grille: '#111108',       // speaker grille dark
-  knob: '#33331a',         // knob color
-  white: '#f0e8c8',       // bright text
+  // Chassis -- brushed gunmetal, not flat black. Panels get real depth
+  // via gradients built from these, not a single solid fill.
+  chassisDark: '#0d0e10',
+  chassisMid: '#1c1e22',
+  chassisLight: '#2a2d33',
+  bezelHighlight: '#3d4149',
+
+  // Panel surfaces (recessed sub-panels within the chassis)
+  panel: '#16181c',
+  panelLight: '#20232a',
+  panelInset: '#0a0b0d',   // deep-set displays/wells
+
+  // LCD-style primary display (frequency, VU, etc.) -- cool cyan-green,
+  // like a real backlit dot-matrix radio LCD, not a warm CRT amber.
+  lcdBg: '#0a1410',
+  lcdGlow: '#39ff8f',
+  lcdGlowDim: '#0f4a2a',
+  lcdText: '#7dffb8',
+
+  // Amber -- reserved for secondary indicators/labels (call sign,
+  // range), giving two distinct "instrument" colors like a real radio's
+  // mixed indicator lighting instead of one color doing everything.
+  amber: '#ffa620',
+  amberDim: '#5c3d10',
+  amberGlow: 'rgba(255, 166, 32, 0.35)',
+
+  // Status/signal colors
+  green: '#39ff8f',
+  greenDim: '#0f4a2a',
+  red: '#e8341c',
+  redBright: '#ff4d2e',
+  redDim: '#4a1208',
+
+  // Text
+  text: '#c8ccd4',
+  textDim: '#63666e',
+  white: '#f4f6f8',
+
+  // Physical detailing
+  screwSlot: '#0a0b0d',
+  screwHighlight: '#4a4e56',
+  knobBody: '#2e3138',
+  knobRing: '#454952',
+  borderLight: 'rgba(255,255,255,0.06)',
+  borderDark: 'rgba(0,0,0,0.5)',
 };
 
 export const fonts = {
-  mono: 'monospace',       // for frequency displays
-  display: 'monospace',    // 7-segment style
+  mono: 'monospace',
+  display: 'monospace',
 };
 
 export const spacing = {
@@ -28,4 +61,11 @@ export const spacing = {
   lg: 24,
   xl: 32,
   xxl: 48,
+};
+
+export const radii = {
+  sm: 3,
+  md: 6,
+  lg: 10,
+  xl: 16,
 };
