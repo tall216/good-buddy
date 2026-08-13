@@ -69,6 +69,11 @@ export function usePTT(): UsePTTReturn {
   const [transmitting, setTransmitting] = useState(false);
   const [lastHeard, setLastHeard] = useState<string | null>(null);
 
+  // Shared across connect()/disconnect() -- see the real bug this fixes
+  // in disconnect()'s comment below.
+  const intentionallyClosedRef = useRef(false);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Set up audio mode for playback through speaker.
   // Migrated from expo-av's setAudioModeAsync -- the old shape
   // (allowsRecordingIOS, shouldDuckAndroid, playThroughEarpieceAndroid,
@@ -103,97 +108,131 @@ export function usePTT(): UsePTTReturn {
 
   const connect = useCallback((callSign: string, lat: number, lng: number, range: number) => {
     setupAudio();
+    intentionallyClosedRef.current = false;
 
-    const ws = new WebSocket(RELAY_URL);
-    wsRef.current = ws;
+    // Real gap found via live testing: the relay server (Render free
+    // tier) went idle and restarted mid-session, killing the WebSocket
+    // with no reconnection attempt -- confirmed via the server's own
+    // logs showing only one client remained "joined" after a restart
+    // while the other device's connection silently stayed dead. Added
+    // a bounded auto-reconnect so a dropped connection (idle timeout,
+    // server restart, network blip) recovers on its own instead of
+    // requiring the user to force-quit and reopen the app.
+    let reconnectAttempts = 0;
+    const MAX_RECONNECT_DELAY_MS = 15000;
 
-    ws.onopen = () => {
-      ws.send(JSON.stringify({
-        type: 'join',
-        callSign,
-        lat,
-        lng,
-        range,
-      }));
-    };
+    const openSocket = () => {
+      const ws = new WebSocket(RELAY_URL);
+      wsRef.current = ws;
 
-    ws.onmessage = async (event) => {
-      let msg;
-      try {
-        msg = JSON.parse(event.data);
-      } catch {
-        return;
-      }
+      ws.onopen = () => {
+        reconnectAttempts = 0;
+        ws.send(JSON.stringify({
+          type: 'join',
+          callSign,
+          lat,
+          lng,
+          range,
+        }));
+      };
 
-      switch (msg.type) {
-        case 'audio': {
-          // Play incoming audio chunk
-          setLastHeard(msg.callSign);
-          const tReceived = Date.now();
-          try {
-            // Decode base64 to a data URI. Real bug found while investigating
-            // playback latency: RecordingPresets.HIGH_QUALITY actually
-            // records .m4a (MPEG-4 AAC), not WAV -- this was hardcoded to
-            // 'audio/wav', a real MIME-type mismatch. Some players tolerate
-            // it via content-sniffing (which is itself extra probing work
-            // before playback can start), some don't. Fixed to match the
-            // real recorded format.
-            const uri = `data:audio/m4a;base64,${msg.data}`;
-            // Release the previous player before creating a new one --
-            // expo-audio's imperative players are not auto-garbage-collected
-            // like expo-av's Audio.Sound.createAsync results were.
-            playerRef.current?.remove();
-            const player = createAudioPlayer(uri);
-            playerRef.current = player;
-            player.play();
-            // TEMP instrumentation for diagnosing perceived delay -- remove
-            // once the real latency budget is understood and settled.
-            // Uses the relay server's own timestamps (serverReceivedAt/
-            // serverRelayedAt) to separate real network+relay time from
-            // local decode/playback-start time, instead of guessing.
-            const tPlaybackStarted = Date.now();
-            console.log(
-              `[latency] payload ${msg.data?.length ?? 0} b64 chars | ` +
-              `server relay->client receive: ${msg.serverRelayedAt ? tReceived - msg.serverRelayedAt : 'n/a'}ms | ` +
-              `client receive->playback start: ${tPlaybackStarted - tReceived}ms`
-            );
-          } catch (e) {
-            console.error('Playback error:', e);
+      ws.onmessage = async (event) => {
+        let msg;
+        try {
+          msg = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+
+        switch (msg.type) {
+          case 'audio': {
+            // Play incoming audio chunk
+            setLastHeard(msg.callSign);
+            const tReceived = Date.now();
+            try {
+              // Decode base64 to a data URI. Real bug found while investigating
+              // playback latency: RecordingPresets.HIGH_QUALITY actually
+              // records .m4a (MPEG-4 AAC), not WAV -- this was hardcoded to
+              // 'audio/wav', a real MIME-type mismatch. Some players tolerate
+              // it via content-sniffing (which is itself extra probing work
+              // before playback can start), some don't. Fixed to match the
+              // real recorded format.
+              const uri = `data:audio/m4a;base64,${msg.data}`;
+              // Release the previous player before creating a new one --
+              // expo-audio's imperative players are not auto-garbage-collected
+              // like expo-av's Audio.Sound.createAsync results were.
+              playerRef.current?.remove();
+              const player = createAudioPlayer(uri);
+              playerRef.current = player;
+              player.play();
+              // TEMP instrumentation for diagnosing perceived delay -- remove
+              // once the real latency budget is understood and settled.
+              // Uses the relay server's own timestamps (serverReceivedAt/
+              // serverRelayedAt) to separate real network+relay time from
+              // local decode/playback-start time, instead of guessing.
+              const tPlaybackStarted = Date.now();
+              console.log(
+                `[latency] payload ${msg.data?.length ?? 0} b64 chars | ` +
+                `server relay->client receive: ${msg.serverRelayedAt ? tReceived - msg.serverRelayedAt : 'n/a'}ms | ` +
+                `client receive->playback start: ${tPlaybackStarted - tReceived}ms`
+              );
+            } catch (e) {
+              console.error('Playback error:', e);
+            }
+            break;
           }
-          break;
-        }
 
-        case 'ptt_start': {
-          // Someone else keyed up — could play a "channel busy" indicator
-          break;
-        }
+          case 'ptt_start': {
+            // Someone else keyed up — could play a "channel busy" indicator
+            break;
+          }
 
-        case 'ptt_end': {
-          break;
-        }
+          case 'ptt_end': {
+            break;
+          }
 
-        case 'joined': {
-          setLastHeard(`${msg.callSign} joined`);
-          break;
-        }
+          case 'joined': {
+            setLastHeard(`${msg.callSign} joined`);
+            break;
+          }
 
-        case 'left': {
-          setLastHeard(`${msg.callSign} left`);
-          break;
+          case 'left': {
+            setLastHeard(`${msg.callSign} left`);
+            break;
+          }
         }
-      }
+      };
+
+      ws.onerror = (err) => {
+        console.error('WebSocket error:', err);
+      };
+
+      ws.onclose = () => {
+        console.log('WebSocket disconnected');
+        if (intentionallyClosedRef.current) return;
+        // Exponential backoff, capped, so a persistently-down relay
+        // doesn't hammer it or drain the battery.
+        const delay = Math.min(1000 * 2 ** reconnectAttempts, MAX_RECONNECT_DELAY_MS);
+        reconnectAttempts++;
+        reconnectTimerRef.current = setTimeout(openSocket, delay);
+      };
     };
 
-    ws.onerror = (err) => {
-      console.error('WebSocket error:', err);
-    };
-
-    ws.onclose = () => {
-      console.log('WebSocket disconnected');
-    };
+    openSocket();
   }, [setupAudio]);
 
   const disconnect = useCallback(() => {
+    // Real bug fixed here: this used to close the socket without ever
+    // telling the reconnect logic in connect() to stop. Found while
+    // tracing why a stale WebSocket could linger after RadioScreen
+    // unmounts/re-mounts -- the old close() would fire onclose, which
+    // (before this fix) had no way to know the disconnect was
+    // intentional, and would schedule a reconnect anyway.
+    intentionallyClosedRef.current = true;
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
     wsRef.current?.close();
     wsRef.current = null;
     playerRef.current?.remove();
@@ -226,6 +265,20 @@ export function usePTT(): UsePTTReturn {
       wsRef.current?.send(JSON.stringify({ type: 'ptt_start' }));
     } catch (e) {
       console.error('Failed to start recording:', e);
+      // Real fix: AudioRecorder is a SharedObject with a native
+      // counterpart -- just nulling the JS ref here left the native
+      // recorder object un-released. Found while investigating a
+      // recurring INVALID_STATE_ERR on iOS: every failed start (or, before
+      // this fix, every successful stop too -- see stopTransmit below)
+      // could leave a stale native AVAudioRecorder instance alive,
+      // plausibly poisoning the AVAudioSession for the next attempt.
+      // release() detaches the JS/native pair immediately instead of
+      // waiting on GC.
+      try {
+        recorderRef.current?.release();
+      } catch {
+        // already released or never fully constructed -- fine to ignore
+      }
       recorderRef.current = null;
     }
   }, [setupAudio, transmitting]);
@@ -239,6 +292,15 @@ export function usePTT(): UsePTTReturn {
       await recorder.stop();
       const tStopped = Date.now();
       const uri = recorder.uri;
+      // Release the native recorder object now that we're done with it --
+      // see the matching comment in startTransmit's catch block for why
+      // this matters (un-released native AudioRecorder instances were a
+      // real, confirmed contributor to the recurring iOS INVALID_STATE_ERR).
+      try {
+        recorder.release();
+      } catch {
+        // already released -- fine to ignore
+      }
       recorderRef.current = null;
       setTransmitting(false);
 
