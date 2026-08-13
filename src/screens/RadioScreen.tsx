@@ -12,6 +12,7 @@ import { Panel, LCDWell, Knob } from '../components/RadioChrome';
 import { useRadio } from '../lib/useRadio';
 import { usePTT } from '../lib/usePTT';
 import { usePushNotifications } from '../lib/usePushNotifications';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -23,6 +24,7 @@ interface Props {
 }
 
 export default function RadioScreen({ callSign }: Props) {
+  const insets = useSafeAreaInsets();
   const [range, setRange] = useState(10);
   const [discoverable, setDiscoverable] = useState(true);
   // Separate opt-in state from `discoverable` on purpose -- see
@@ -153,7 +155,7 @@ export default function RadioScreen({ callSign }: Props) {
   });
 
   return (
-    <View style={styles.root}>
+    <View style={[styles.root, { paddingTop: Math.max(insets.top, spacing.lg), paddingBottom: insets.bottom }]}>
       {/* Top bar: call sign + status */}
       <View style={styles.topBar}>
         <Panel style={styles.callSignBadge} screws={false}>
@@ -297,7 +299,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.chassisDark,
     paddingHorizontal: spacing.md,
-    paddingTop: spacing.lg,
   },
   topBar: {
     flexDirection: 'row',
