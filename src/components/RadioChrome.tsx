@@ -1,10 +1,68 @@
 // Shared radio-chassis UI primitives. Built once, reused across both
 // screens so the whole app reads as one consistent physical device
 // instead of two independently-styled screens.
+//
+// Real fix: originally built against expo-linear-gradient, but the
+// installed dev-client APK on the real test device has no
+// ExpoLinearGradient native module linked in (confirmed via a real
+// on-device crash log: "Can't find ViewManager
+// 'ViewManagerAdapter_ExpoLinearGradient'... existing names are: [...]" --
+// expo-linear-gradient was added to package.json but the dev-client
+// binary was never rebuilt with it, and the user explicitly asked to be
+// sparing with EAS build credits rather than trigger a new native build
+// for this). The SAME crash log's ViewManagerRegistry dump confirmed
+// react-native-svg (RNSVGLinearGradient etc.) IS already linked into the
+// current build, so gradients are rebuilt here on top of that instead --
+// a real, verified-available alternative rather than a guess, and no new
+// native build required.
 import React from 'react';
 import { View, StyleSheet, ViewStyle } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Rect } from 'react-native-svg';
 import { colors, radii } from '../theme';
+
+// Fills its parent with a top-to-bottom (or custom-angled) two/three-stop
+// gradient, rendered behind `children`. Uses objectBoundingBox gradient
+// units (react-native-svg's default) so percentage-based x1/y1/x2/y2
+// coordinates scale to the actual rendered size automatically -- no
+// onLayout/measuring needed, unlike a manually-sized SVG.
+function GradientFill({
+  stops,
+  x1 = '0%',
+  y1 = '0%',
+  x2 = '0%',
+  y2 = '100%',
+  children,
+  style,
+}: {
+  stops: { offset: string; color: string }[];
+  x1?: string;
+  y1?: string;
+  x2?: string;
+  y2?: string;
+  children?: React.ReactNode;
+  style?: ViewStyle | ViewStyle[];
+}) {
+  // Each instance needs its own gradient id -- reusing one id across
+  // multiple mounted gradients on the same screen would make later ones
+  // silently paint with an earlier instance's stops (SVG ids are a flat
+  // global namespace within the view tree).
+  const gradientId = React.useId();
+  return (
+    <View style={style}>
+      <Svg style={StyleSheet.absoluteFill} width="100%" height="100%">
+        <Defs>
+          <SvgLinearGradient id={gradientId} x1={x1} y1={y1} x2={x2} y2={y2}>
+            {stops.map((s) => (
+              <Stop key={s.offset} offset={s.offset} stopColor={s.color} />
+            ))}
+          </SvgLinearGradient>
+        </Defs>
+        <Rect x={0} y={0} width="100%" height="100%" fill={`url(#${gradientId})`} />
+      </Svg>
+      {children}
+    </View>
+  );
+}
 
 // A single flat-head screw, for panel-corner hardware detailing --
 // the small touch that reads as "real machined chassis" rather than a
@@ -33,16 +91,14 @@ export function Panel({
 }) {
   return (
     <View style={[chromeStyles.panelOuter, style]}>
-      <LinearGradient
-        colors={inset
-          ? [colors.panelInset, colors.panel]
-          : [colors.panelLight, colors.panel]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 0, y: 1 }}
+      <GradientFill
+        stops={inset
+          ? [{ offset: '0%', color: colors.panelInset }, { offset: '100%', color: colors.panel }]
+          : [{ offset: '0%', color: colors.panelLight }, { offset: '100%', color: colors.panel }]}
         style={chromeStyles.panelGradient}
       >
         {children}
-      </LinearGradient>
+      </GradientFill>
       {screws && (
         <>
           <Screw style={chromeStyles.screwTL} />
@@ -65,27 +121,32 @@ export function LCDWell({
 }) {
   return (
     <View style={[chromeStyles.lcdOuter, style]}>
-      <LinearGradient
-        colors={[colors.lcdBg, '#050a08']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 0, y: 1 }}
+      <GradientFill
+        stops={[{ offset: '0%', color: colors.lcdBg }, { offset: '100%', color: '#050a08' }]}
         style={chromeStyles.lcdGradient}
       >
         {children}
-      </LinearGradient>
+      </GradientFill>
     </View>
   );
 }
 
-// A physical-looking rotary knob with a radial-gradient body and a
-// tick indicator, for the bottom-of-panel control detailing.
+// A physical-looking rotary knob with a radial-gradient-esque diagonal
+// body gradient and a tick indicator, for the bottom-of-panel control
+// detailing.
 export function Knob({ rotation = 0 }: { rotation?: number }) {
   return (
     <View style={chromeStyles.knobOuter}>
-      <LinearGradient
-        colors={[colors.knobRing, colors.knobBody, colors.chassisDark]}
-        start={{ x: 0.3, y: 0.2 }}
-        end={{ x: 0.8, y: 1 }}
+      <GradientFill
+        stops={[
+          { offset: '0%', color: colors.knobRing },
+          { offset: '50%', color: colors.knobBody },
+          { offset: '100%', color: colors.chassisDark },
+        ]}
+        x1="20%"
+        y1="10%"
+        x2="90%"
+        y2="100%"
         style={chromeStyles.knobGradient}
       >
         <View
@@ -94,7 +155,7 @@ export function Knob({ rotation = 0 }: { rotation?: number }) {
             { transform: [{ rotate: `${rotation}deg` }] },
           ]}
         />
-      </LinearGradient>
+      </GradientFill>
     </View>
   );
 }
@@ -151,6 +212,7 @@ const chromeStyles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: colors.borderDark,
+    overflow: 'hidden',
   },
   knobIndicator: {
     width: 3,
