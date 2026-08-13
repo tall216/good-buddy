@@ -1,9 +1,15 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Replace these with your Supabase project values
-// Get them from: Supabase Dashboard > Project Settings > API
-const SUPABASE_URL = 'https://YOUR_PROJECT_ID.supabase.co';
-const SUPABASE_ANON_KEY = 'your-anon-key-here';
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  throw new Error(
+    'Missing EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_ANON_KEY. ' +
+    'Copy .env.example to .env and fill in your Supabase project values ' +
+    '(Supabase Dashboard > Project Settings > API), then restart the Expo dev server.'
+  );
+}
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
