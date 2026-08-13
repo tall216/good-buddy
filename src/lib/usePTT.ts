@@ -2,8 +2,7 @@ import { useRef, useCallback, useState } from 'react';
 import { Audio } from 'expo-av';
 
 // WebSocket relay server URL
-// Change this to your deployed server URL
-const RELAY_URL = 'ws://localhost:8080';
+const RELAY_URL = process.env.EXPO_PUBLIC_RELAY_URL || 'ws://localhost:8080';
 
 interface UsePTTReturn {
   transmitting: boolean;
