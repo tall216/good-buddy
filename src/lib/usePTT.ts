@@ -481,7 +481,18 @@ export function usePTT(): UsePTTReturn {
       // fail to "finalize" the way MediaRecorder.stop() did.
       try {
         const stream = streamRef.current;
-        if (!stream) return;
+        if (!stream) {
+          // Real bug found via live device testing: if streamRef.current
+          // is already null here (e.g. a stray/duplicate startTransmit
+          // call raced and cleared it, or start() itself failed after
+          // setTransmitting(true) had already fired), returning bare
+          // left the UI permanently stuck showing "TRANSMITTING" with
+          // no way to recover except force-closing the app. Always
+          // clear the UI state on the way out, even when there's
+          // nothing real to stop.
+          setTransmitting(false);
+          return;
+        }
 
         stream.stop();
         const tStopped = Date.now();
@@ -537,7 +548,13 @@ export function usePTT(): UsePTTReturn {
     // in startTransmit's catch block for that story).
     try {
       const recorder = recorderRef.current;
-      if (!recorder) return;
+      if (!recorder) {
+        // Same real bug/fix as the Android branch above: never leave
+        // the UI stuck showing "TRANSMITTING" just because there was
+        // nothing to actually stop.
+        setTransmitting(false);
+        return;
+      }
 
       // Real bug found via ffprobe analysis of actual recorded files
       // pulled off the physical Android device (adb + run-as): every
