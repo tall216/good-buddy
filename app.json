@@ -53,6 +53,13 @@
           "icon": "./assets/android-icon-monochrome.png",
           "color": "#ffa620"
         }
+      ],
+      [
+        "expo-navigation-bar",
+        {
+          "enforceContrast": false,
+          "style": "light"
+        }
       ]
     ],
     "extra": {
