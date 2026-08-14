@@ -184,7 +184,7 @@ wss.on('connection', (ws) => {
           callSign: msg.callSign || 'Unknown',
           lat: msg.lat,
           lng: msg.lng,
-          range: msg.range || 10, // miles
+          range: msg.range || 2500, // miles
         });
         console.log(`${msg.callSign} joined at ${msg.lat}, ${msg.lng} (range: ${msg.range}mi)`);
 

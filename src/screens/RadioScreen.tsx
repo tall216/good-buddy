@@ -16,8 +16,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-// Range options in miles
-const RANGE_OPTIONS = [1, 5, 10, 25, 50, 100];
+// Range options in miles. 2500 added as the effective "unlimited"
+// option for now -- real user request: testers are geographically
+// spread out (not all local), and the previous 100mi max meant remote
+// testers genuinely could not hear each other at all. 2500mi covers
+// the entire continental US as a practical ceiling.
+const RANGE_OPTIONS = [1, 5, 10, 25, 50, 100, 2500];
 
 interface Props {
   callSign: string;
@@ -25,7 +29,7 @@ interface Props {
 
 export default function RadioScreen({ callSign }: Props) {
   const insets = useSafeAreaInsets();
-  const [range, setRange] = useState(10);
+  const [range, setRange] = useState(2500);
   const [discoverable, setDiscoverable] = useState(true);
   // Separate opt-in state from `discoverable` on purpose -- see
   // usePushNotifications.ts's top comment for why these must not be

@@ -25,10 +25,18 @@ export function useRadio(): UseRadioReturn {
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [discoverable, setDiscoverableState] = useState(true);
-  const [range, setRange] = useState(10); // miles
+  // Real fix: this range independently gates the "nearby buddies"
+  // discovery query (findNearbyUsers below) -- separate from
+  // RadioScreen's own range state used for the PTT relay. RadioScreen
+  // never calls setRange on this hook, so this default alone decides
+  // discovery range. Matched to RadioScreen's 2500mi default so
+  // discovery and relay range agree -- previously this stayed at 10mi
+  // even when a user set relay range higher, silently hiding nearby
+  // (but >10mi) testers from the "GOOD BUDDIES IN RANGE" count.
+  const [range, setRange] = useState(2500); // miles
 
   const discoverableRef = useRef(true);
-  const rangeRef = useRef(10);
+  const rangeRef = useRef(2500);
   const userIdRef = useRef<string | null>(null);
   const locationRef = useRef<Location.LocationObject | null>(null);
 
