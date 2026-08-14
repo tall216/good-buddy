@@ -20,6 +20,7 @@
     },
     "android": {
       "package": "com.davidevans.goodbuddy",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#1a1a0a",
         "foregroundImage": "./assets/android-icon-foreground.png",

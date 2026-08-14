@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "177134587817",
+    "project_id": "orion-160a1",
+    "storage_bucket": "orion-160a1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:177134587817:android:a7a2f2779605f36b87feb8",
+        "android_client_info": {
+          "package_name": "com.davidevans.goodbuddy"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCeSvn8PvgTWG1pBP1I_LRPfoQjRrxQBxg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
