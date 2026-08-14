@@ -35,6 +35,7 @@ yarn-error.*
 .env.local
 .env*.local
 .supabase-db-password
+firebase-service-account.json
 
 # typescript
 *.tsbuildinfo
